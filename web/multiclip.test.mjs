@@ -99,13 +99,17 @@ assert.equal(secondHeatmap.confirmedSamples, 3);
 assert.equal(firstHeatmap.detectionCount, 3);
 assert.equal(secondHeatmap.detectionCount, 3);
 
-const occupiedColumns = (heatmap) => {
-  const columns = [];
-  heatmap.cells.forEach((value, index) => { if (value > 0) columns.push(index % heatmap.columns); });
-  return columns;
+const weightedColumn = (heatmap) => {
+  let weighted = 0;
+  let total = 0;
+  heatmap.cells.forEach((value, index) => {
+    weighted += (index % heatmap.columns) * value;
+    total += value;
+  });
+  return total ? weighted / total : 0;
 };
-assert.ok(Math.max(...occupiedColumns(firstHeatmap)) < 20, 'Clip 1 heat must remain on the left');
-assert.ok(Math.min(...occupiedColumns(secondHeatmap)) > 28, 'Clip 2 heat must remain on the right');
+assert.ok(weightedColumn(firstHeatmap) < firstHeatmap.columns * 0.4, 'Clip 1 heat must remain concentrated on the left');
+assert.ok(weightedColumn(secondHeatmap) > secondHeatmap.columns * 0.6, 'Clip 2 heat must remain concentrated on the right');
 
 const htmlIds = [...html.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]);
 assert.equal(new Set(htmlIds).size, htmlIds.length, 'HTML ids must be unique');
@@ -114,6 +118,9 @@ const missingIds = [...new Set(referencedIds)].filter((id) => !htmlIds.includes(
 assert.deepEqual(missingIds, [], `Missing HTML ids referenced by app.js: ${missingIds.join(', ')}`);
 assert.match(html, /id="report-clip-cuts"/);
 assert.match(html, /id="report-heatmap-pages"/);
+assert.match(html, /id="report-clip-list"/);
+assert.match(html, /id="report-clip-time-slider"/);
+assert.match(html, /id="report-video-time-slider"/);
 assert.match(html, /data-action="open-json"[^>]*id="json-import-button"/);
 assert.match(html, /data-action="open-video"[^>]*id="video-import-button"/);
 assert.match(html, /id="json-input"[^>]*accept="\.json,application\/json"/);

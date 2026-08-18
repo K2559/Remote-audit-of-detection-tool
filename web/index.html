@@ -337,6 +337,35 @@
             </details>
           </section>
 
+          <section class="report-clip-workspace" aria-label="Report clips and timelines">
+            <aside class="report-clip-sidebar" aria-label="Report video clips">
+              <div class="clip-sidebar-header">
+                <div><span class="section-kicker">SOURCE</span><h2>Clips</h2></div>
+                <span id="report-clip-count" class="clip-count">0</span>
+              </div>
+              <div id="report-clip-list" class="report-clip-list"></div>
+            </aside>
+            <section class="report-clip-inspector" aria-label="Selected report clip timeline">
+              <div class="report-clip-inspector-heading">
+                <div><span class="section-kicker">CLIP REPORT</span><h2 id="report-active-clip-title">Clip 1 report</h2></div>
+                <button class="button" type="button" data-action="focus-report-clip"><span class="icon" data-icon="eye"></span><span>View report</span></button>
+              </div>
+              <div class="report-timebar-stack" aria-label="Report frame navigation timelines">
+                <div class="video-timebar clip-timebar" aria-label="Selected report clip timeline">
+                  <span id="report-clip-time-label" class="video-timebar-label">Clip</span>
+                  <div class="video-timebar-track"><input id="report-clip-time-slider" class="video-time-slider" type="range" min="0" max="1" value="0" step="0.2" aria-label="Time within selected report clip" /></div>
+                  <span class="video-timebar-value"><span id="report-clip-time-current">00:00:00.0</span><span class="video-time-separator"> / </span><span id="report-clip-time-end">00:00:00.0</span></span>
+                </div>
+                <div class="video-timebar global-timebar" aria-label="Full report video timeline">
+                  <span class="video-timebar-label">Video</span>
+                  <div class="video-timebar-track"><input id="report-video-time-slider" class="video-time-slider" type="range" min="0" max="1" value="0" step="0.2" aria-label="Time in full report video" /></div>
+                  <span class="video-timebar-value"><span id="report-video-time-current">00:00:00</span><span class="video-time-separator"> / </span><span id="report-video-time-end">00:00:00</span></span>
+                </div>
+              </div>
+              <p id="report-clip-time-note" class="report-clip-time-note">Click a clip thumbnail or timeline to inspect its source frame.</p>
+            </section>
+          </section>
+
           <div id="report-document" class="report-document">
             <section class="report-sheet report-annex-a">
               <div class="report-running-head"><strong>Annex VII</strong><span>Appendix A</span></div>

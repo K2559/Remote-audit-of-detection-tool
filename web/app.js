@@ -143,6 +143,7 @@ const state = {
     compliance: Object.fromEntries(REPORT_REQUIREMENTS.map((item) => [item.id, false])),
     clips: [],
     clipCutsText: '',
+    selectedClipId: null,
     captures: [],
     baseImages: {},
     preparing: false,
@@ -211,6 +212,7 @@ function createRecoverySnapshot(savedAt = new Date().toISOString()) {
       compliance: state.report.compliance,
       clips: state.report.clips,
       clipCutsText: state.report.clipCutsText,
+      selectedClipId: state.report.selectedClipId,
     },
   };
 }
@@ -427,6 +429,7 @@ function applyRecoveryCheckpoint(checkpoint) {
     },
     clips: Array.isArray(savedReport.clips) ? savedReport.clips : [],
     clipCutsText: String(savedReport.clipCutsText || ''),
+    selectedClipId: savedReport.selectedClipId ? String(savedReport.selectedClipId) : null,
     captures: [],
     baseImages: {},
     preparing: false,
@@ -1498,6 +1501,7 @@ function setFrame(index, { fromHeldNavigation = false } = {}) {
       renderHeatmapFrameOnly();
     }
   }
+  if (state.view === 'report') updateReportTimebars(null, { syncSelection: true });
   scheduleRecoveryCursor();
   return frameReady;
 }
@@ -2294,7 +2298,13 @@ function renderClipSidebar(listSelector = '#clip-list', countSelector = '#clip-c
   const clips = state.doc?.clips || [];
   const count = $(countSelector);
   if (count) count.textContent = clips.length;
-  const signature = clips.map((clip) => `${clip.id}:${clip.start_sec}:${clip.end_sec}`).join('|');
+  const signature = clips.map((clip) => [
+    clip.id,
+    clip.start_sec,
+    clip.end_sec,
+    state.clipThumbnails.has(clipThumbnailKey(clip, 'start')),
+    state.clipThumbnails.has(clipThumbnailKey(clip, 'end')),
+  ].join(':')).join('|');
   if (list.dataset.signature === signature && list.childElementCount === clips.length) {
     updateActiveClip();
     updateClipSelectionUi();
@@ -3375,6 +3385,7 @@ function resetReportClips() {
   const source = (state.doc?.clips || []).map((clip, index) => ({ ...clip, id: `clip-${index + 1}`, index, name: `Clip ${index + 1}` }));
   if (source.length === 1 && source[0].start_sec <= 0.001 && duration > source[0].end_sec) source[0].end_sec = duration;
   state.report.clips = source.length ? source : [{ id: 'clip-1', index: 0, name: 'Clip 1', start_sec: 0, end_sec: duration, source: 'report' }];
+  state.report.selectedClipId = state.report.clips[0]?.id || null;
   state.report.clipCutsText = state.report.clips.slice(1).map((clip) => formatClock(clip.start_sec)).join(', ');
   state.report.captures = [];
   state.report.baseImages = {};
@@ -3396,6 +3407,7 @@ function applyReportClipCuts(value) {
   const cuts = [...new Set(parsed)].sort((a, b) => a - b);
   const bounds = [0, ...cuts, duration];
   state.report.clips = bounds.slice(0, -1).map((start, index) => ({ id: `clip-${index + 1}`, index, name: `Clip ${index + 1}`, start_sec: start, end_sec: bounds[index + 1], source: 'manual' }));
+  state.report.selectedClipId = state.report.clips.find((clip) => clip.id === state.report.selectedClipId)?.id || state.report.clips[0]?.id || null;
   state.report.clipCutsText = String(value || '');
   state.report.captures = [];
   state.report.baseImages = {};
@@ -3405,6 +3417,188 @@ function applyReportClipCuts(value) {
 
 function reportClips() {
   return state.report.clips.length ? state.report.clips : [{ id: 'clip-1', index: 0, name: 'Clip 1', start_sec: 0, end_sec: reportDurationSec(), source: 'report' }];
+}
+
+function reportSelectedClip() {
+  const clips = reportClips();
+  const selected = clips.find((clip) => clip.id === state.report.selectedClipId) || clips[0] || null;
+  if (selected && state.report.selectedClipId !== selected.id) state.report.selectedClipId = selected.id;
+  return selected;
+}
+
+function reportClipFrameIndex(clip, edge = 'start') {
+  if (!clip) return -1;
+  const sampleStep = 1 / Math.max(1, Number(state.doc?.sampling?.sample_fps) || 5);
+  const start = Math.max(0, Number(clip.start_sec) || 0);
+  const end = Math.max(start, Number(clip.end_sec) || start);
+  const time = edge === 'end' ? Math.max(start, end - sampleStep) : start;
+  return nearestFrameIndexAtTimeline(time);
+}
+
+function reportFocusSection(clip = reportSelectedClip()) {
+  if (!clip) return;
+  const section = [...$$('#report-heatmap-pages [data-clip-id]')].find((item) => item.dataset.clipId === clip.id);
+  section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function setReportSelectedClip(clip, { jump = false, edge = 'start', focus = false } = {}) {
+  if (!clip) return;
+  state.report.selectedClipId = clip.id;
+  if (jump) {
+    const frameIndex = reportClipFrameIndex(clip, edge);
+    if (frameIndex >= 0) setFrame(frameIndex);
+  } else {
+    updateReportTimebars();
+  }
+  updateReportClipSidebarUi();
+  if (focus) reportFocusSection(clip);
+  scheduleRecoveryCursor();
+}
+
+function reportClipThumbnail(clip, edge) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'report-clip-thumbnail';
+  button.setAttribute('aria-label', `Jump to ${clip.name} ${edge} frame`);
+  button.title = `Go to clip ${edge}`;
+  const source = state.clipThumbnails.get(clipThumbnailKey(clip, edge)) || reportBaseImage(clip);
+  if (source) {
+    const image = document.createElement('img');
+    image.src = source;
+    image.alt = '';
+    button.append(image);
+  } else {
+    const placeholder = document.createElement('span');
+    placeholder.className = 'icon';
+    placeholder.innerHTML = icon('image');
+    button.append(placeholder);
+  }
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    setReportSelectedClip(clip, { jump: true, edge });
+  });
+  return button;
+}
+
+function updateReportClipSidebarUi(timelineOverride = null) {
+  const selected = reportSelectedClip();
+  const timeline = Math.max(0, Number(timelineOverride ?? frameTimeline(currentFrame())) || 0);
+  $$('#report-clip-list .report-clip-row').forEach((row) => {
+    const clip = reportClips().find((item) => item.id === row.dataset.reportClipId);
+    if (!clip) return;
+    const active = clip.id === selected?.id;
+    row.classList.toggle('is-active', active);
+    active ? row.setAttribute('aria-current', 'true') : row.removeAttribute('aria-current');
+    const fill = row.querySelector('.report-clip-progress > span');
+    const duration = Math.max(0.001, Number(clip.end_sec) - Number(clip.start_sec));
+    if (fill) fill.style.width = `${Math.max(0, Math.min(1, (timeline - Number(clip.start_sec)) / duration)) * 100}%`;
+  });
+}
+
+function renderReportClipSidebar() {
+  const list = $('#report-clip-list');
+  if (!list) return;
+  const clips = reportClips();
+  const count = $('#report-clip-count');
+  if (count) count.textContent = clips.length;
+  const signature = clips.map((clip) => [
+    clip.id,
+    clip.start_sec,
+    clip.end_sec,
+    state.clipThumbnails.has(clipThumbnailKey(clip, 'start')),
+    state.clipThumbnails.has(clipThumbnailKey(clip, 'end')),
+    Boolean(reportBaseImage(clip)),
+  ].join(':')).join('|');
+  if (list.dataset.signature === signature && list.childElementCount === clips.length) {
+    updateReportClipSidebarUi();
+    return;
+  }
+  list.dataset.signature = signature;
+  list.replaceChildren();
+  clips.forEach((clip, index) => {
+    const row = document.createElement('article');
+    row.className = 'report-clip-row';
+    row.dataset.reportClipId = clip.id;
+    row.setAttribute('aria-label', `View ${clip.name}, ${formatClipClock(clip.start_sec)} to ${formatClipClock(clip.end_sec)}`);
+
+    const heading = document.createElement('button');
+    heading.type = 'button';
+    heading.className = 'report-clip-row-heading';
+    const title = document.createElement('strong');
+    title.textContent = clip.name || `Clip ${index + 1}`;
+    const duration = document.createElement('span');
+    duration.textContent = clipDurationLabel(clip);
+    heading.append(title, duration);
+
+    const thumbnails = document.createElement('div');
+    thumbnails.className = 'report-clip-thumbnails';
+    thumbnails.append(reportClipThumbnail(clip, 'start'), reportClipThumbnail(clip, 'end'));
+
+    const range = document.createElement('div');
+    range.className = 'report-clip-time-range';
+    range.innerHTML = `<span>${formatClipClock(clip.start_sec)}</span><span class="icon">${icon('chevron-right')}</span><span>${formatClipClock(clip.end_sec)}</span>`;
+
+    const progress = document.createElement('div');
+    progress.className = 'report-clip-progress';
+    progress.append(document.createElement('span'));
+    row.append(heading, thumbnails, range, progress);
+    heading.addEventListener('click', (event) => {
+      event.stopPropagation();
+      setReportSelectedClip(clip, { focus: true });
+    });
+    row.addEventListener('click', () => setReportSelectedClip(clip, { focus: true }));
+    list.append(row);
+  });
+  updateReportClipSidebarUi();
+}
+
+function updateReportTimebars(timeOverride = null, { syncSelection = false } = {}) {
+  const clips = reportClips();
+  const duration = Math.max(0, Number($('#frame-video')?.duration) || durationSec());
+  const timeline = Math.max(0, Math.min(duration || durationSec(), Number(timeOverride ?? frameTimeline(currentFrame())) || 0));
+  if (syncSelection) {
+    const containing = clips.find((clip, index) => timeline >= Number(clip.start_sec) - 0.0001 && (timeline < Number(clip.end_sec) || index === clips.length - 1));
+    if (containing) state.report.selectedClipId = containing.id;
+  }
+  const clip = reportSelectedClip();
+  const step = Math.max(0.001, 1 / Math.max(1, Number(state.doc?.sampling?.sample_fps) || 5));
+  const videoSlider = $('#report-video-time-slider');
+  if (videoSlider) {
+    videoSlider.disabled = duration <= 0;
+    videoSlider.min = '0';
+    videoSlider.max = String(Math.max(0.001, duration));
+    videoSlider.step = String(step);
+    videoSlider.value = String(timeline);
+    videoSlider.style.setProperty('--timebar-progress', `${duration ? timeline / duration * 100 : 0}%`);
+    videoSlider.setAttribute('aria-valuetext', `${formatClipClock(timeline)} of ${formatClipClock(duration)}`);
+  }
+  const videoCurrent = $('#report-video-time-current');
+  const videoEnd = $('#report-video-time-end');
+  if (videoCurrent) videoCurrent.textContent = formatClipClock(timeline);
+  if (videoEnd) videoEnd.textContent = formatClipClock(duration);
+
+  const position = clip ? clipTimebarPosition(clip, timeline) : { current: 0, duration: 0 };
+  const clipSlider = $('#report-clip-time-slider');
+  if (clipSlider) {
+    clipSlider.disabled = !clip || position.duration <= 0;
+    clipSlider.min = '0';
+    clipSlider.max = String(Math.max(0.001, position.duration));
+    clipSlider.step = String(step);
+    clipSlider.value = String(position.current);
+    clipSlider.style.setProperty('--timebar-progress', `${position.duration ? position.current / position.duration * 100 : 0}%`);
+    clipSlider.setAttribute('aria-valuetext', `${formatTime(position.current)} of ${formatTime(position.duration)} in ${clip?.name || 'clip'}`);
+  }
+  const clipLabel = $('#report-clip-time-label');
+  const clipCurrent = $('#report-clip-time-current');
+  const clipEnd = $('#report-clip-time-end');
+  const title = $('#report-active-clip-title');
+  const note = $('#report-clip-time-note');
+  if (clipLabel) clipLabel.textContent = clip?.name || 'Clip';
+  if (clipCurrent) clipCurrent.textContent = formatTime(position.current);
+  if (clipEnd) clipEnd.textContent = formatTime(position.duration);
+  if (title) title.textContent = `${clip?.name || 'Clip'} report`;
+  if (note) note.textContent = clip ? `${clip.name}: ${formatClipClock(clip.start_sec)} to ${formatClipClock(clip.end_sec)}. Click either image to jump to its source frame.` : 'No report clip available.';
+  updateReportClipSidebarUi(timeline);
 }
 
 function clipTimepoints(clip, intervalSec) {
@@ -3620,28 +3814,42 @@ function reportHeatColor(value) {
 }
 
 function rasterizeReportHeatmap(clip, columns = 48, rows = 36) {
-  const cells = new Float32Array(columns * rows);
-  let matchedSamples = 0;
-  let confirmedSamples = 0;
-  let detectionCount = 0;
-  clipTimepoints(clip, 10).forEach((time) => {
-    const sample = nearestFrameInClip(clip, time, reportSampleTolerance());
-    if (!sample) return;
-    matchedSamples += 1;
-    if (sample.review_status !== 'accepted' && sample.review_status !== 'edited') return;
-    confirmedSamples += 1;
-    sample.detections.forEach((detection) => {
-      const box = clampBox(detection.bbox_xyxy_pixels);
-      if (!boxUsable(box)) return;
-      detectionCount += 1;
-      const left = Math.max(0, Math.min(columns - 1, Math.floor(box[0] / videoWidth() * columns)));
-      const right = Math.max(left, Math.min(columns - 1, Math.ceil(box[2] / videoWidth() * columns) - 1));
-      const top = Math.max(0, Math.min(rows - 1, Math.floor(box[1] / videoHeight() * rows)));
-      const bottom = Math.max(top, Math.min(rows - 1, Math.ceil(box[3] / videoHeight() * rows) - 1));
-      for (let row = top; row <= bottom; row += 1) for (let column = left; column <= right; column += 1) cells[row * columns + column] += 1;
-    });
+  const start = Math.max(0, Number(clip.start_sec) || 0);
+  const end = Math.max(start, Number(clip.end_sec) || start);
+  const aggregate = heatmapAggregateForClip({
+    ...clip,
+    id: `report-${clip.id}`,
+    index: undefined,
+    start_sec: start,
+    end_sec: Math.max(start, end - 0.001),
   });
-  return { cells, columns, rows, peak: Math.max(0, ...cells), matchedSamples, confirmedSamples, detectionCount };
+  const cells = new Float32Array(columns * rows);
+  if (aggregate?.values?.length) {
+    for (let row = 0; row < rows; row += 1) {
+      const sourceTop = Math.floor(row * aggregate.rows / rows);
+      const sourceBottom = Math.max(sourceTop + 1, Math.ceil((row + 1) * aggregate.rows / rows));
+      for (let column = 0; column < columns; column += 1) {
+        const sourceLeft = Math.floor(column * aggregate.columns / columns);
+        const sourceRight = Math.max(sourceLeft + 1, Math.ceil((column + 1) * aggregate.columns / columns));
+        let value = 0;
+        for (let sourceRow = sourceTop; sourceRow < sourceBottom; sourceRow += 1) {
+          for (let sourceColumn = sourceLeft; sourceColumn < sourceRight; sourceColumn += 1) {
+            value = Math.max(value, aggregate.values[sourceRow * aggregate.columns + sourceColumn] || 0);
+          }
+        }
+        cells[row * columns + column] = value;
+      }
+    }
+  }
+  return {
+    cells,
+    columns,
+    rows,
+    peak: Math.max(0, ...cells),
+    matchedSamples: aggregate?.frameCount || 0,
+    confirmedSamples: aggregate?.framesWithBoxes || 0,
+    detectionCount: aggregate?.boxCount || 0,
+  };
 }
 
 function renderReportHeatmaps() {
@@ -3661,7 +3869,7 @@ function renderReportHeatmaps() {
         <div><strong>Name of Tenderer</strong><span>:</span><em data-page-tenderer></em></div>
         <div><strong>Date of Demonstration</strong><span>:</span><em data-page-date></em></div>
       </div>
-      <h3 class="report-heatmap-description">Heat Map showing the intensity of rodent activities by overlaying thermal images taken from the thermal video with time interval of 10 seconds</h3>
+      <h3 class="report-heatmap-description">Heat Map showing the intensity of rodent activities aggregated across the full video clip and overlaid on a grayscale source frame</h3>
       <div class="report-frequency-legend">
         <div class="report-legend-label"><strong>Legend</strong></div>
         <div class="report-frequency-body">
@@ -3704,8 +3912,8 @@ function renderReportHeatmaps() {
     }
     const empty = section.querySelector('.report-media-empty');
     empty.hidden = heatmap.detectionCount > 0;
-    empty.textContent = baseImage ? 'No confirmed detections at 10-second samples' : 'Source video not attached';
-    section.querySelector('.report-heatmap-note').textContent = `${heatmap.matchedSamples} thermal images matched; ${heatmap.confirmedSamples} confirmed samples and ${heatmap.detectionCount} rodent boxes contributed to this clip heat map.`;
+    empty.textContent = baseImage ? 'No rodent detections in this clip' : 'Source video not attached';
+    section.querySelector('.report-heatmap-note').textContent = `${heatmap.matchedSamples.toLocaleString()} sampled frames in this clip; ${heatmap.confirmedSamples.toLocaleString()} frames with detections and ${heatmap.detectionCount.toLocaleString()} rodent boxes contributed to this clip-wide heat map.`;
     root.append(section);
   });
 }
@@ -3772,12 +3980,14 @@ function renderReportCaptures() {
 
 function renderReport() {
   renderReportControls();
+  renderReportClipSidebar();
   renderReportMetrics();
   renderReportCompliance();
   renderReportCountLog();
   renderReportHeatmaps();
   renderReportCaptures();
   renderReportIdentity();
+  updateReportTimebars();
 }
 
 function waitForVideoMetadata(video) {
@@ -4269,6 +4479,7 @@ function bindEvents() {
     else if (action === 'delete-selected') deleteSelectedRows();
     else if (action === 'prepare-report') void prepareReportMedia();
     else if (action === 'print-report') void printReport();
+    else if (action === 'focus-report-clip') reportFocusSection();
     else if (action === 'show-shortcuts') openShortcuts();
     else if (action === 'close-shortcuts') closeShortcuts();
   }));
@@ -4370,6 +4581,48 @@ function bindEvents() {
     state.clipTimeScrubTimer = setTimeout(() => commitHeatmapClipTime(localTime, clip), 55);
   });
   heatmapClipTimeSlider?.addEventListener('change', (event) => commitHeatmapClipTime(event.target.value));
+  const reportVideoTimeSlider = $('#report-video-time-slider');
+  const commitReportVideoTime = (value) => {
+    const time = Math.max(0, Number(value) || 0);
+    clearTimeout(state.videoTimeScrubTimer);
+    clearTimeout(state.clipTimeScrubTimer);
+    state.videoTimeScrubTimer = null;
+    state.clipTimeScrubTimer = null;
+    const index = nearestFrameIndexAtTimeline(time);
+    if (index >= 0) setFrame(index);
+  };
+  reportVideoTimeSlider?.addEventListener('input', (event) => {
+    const time = Number(event.target.value) || 0;
+    updateReportTimebars(time, { syncSelection: true });
+    clearTimeout(state.clipTimeScrubTimer);
+    clearTimeout(state.videoTimeScrubTimer);
+    state.videoTimeScrubTimer = setTimeout(() => commitReportVideoTime(time), 55);
+  });
+  reportVideoTimeSlider?.addEventListener('change', (event) => commitReportVideoTime(event.target.value));
+  const reportClipTimeSlider = $('#report-clip-time-slider');
+  const commitReportClipTime = (value, clip = reportSelectedClip()) => {
+    if (!clip) return;
+    const start = Math.max(0, Number(clip.start_sec) || 0);
+    const target = clipTimebarPosition(clip, start + Math.max(0, Number(value) || 0)).timeline;
+    clearTimeout(state.clipTimeScrubTimer);
+    clearTimeout(state.videoTimeScrubTimer);
+    state.clipTimeScrubTimer = null;
+    state.videoTimeScrubTimer = null;
+    const index = nearestFrameIndexAtTimeline(target);
+    if (index >= 0) setFrame(index);
+  };
+  reportClipTimeSlider?.addEventListener('input', (event) => {
+    const clip = reportSelectedClip();
+    if (!clip) return;
+    const start = Math.max(0, Number(clip.start_sec) || 0);
+    const localTime = Math.max(0, Number(event.target.value) || 0);
+    const target = clipTimebarPosition(clip, start + localTime).timeline;
+    updateReportTimebars(target);
+    clearTimeout(state.videoTimeScrubTimer);
+    clearTimeout(state.clipTimeScrubTimer);
+    state.clipTimeScrubTimer = setTimeout(() => commitReportClipTime(localTime, clip), 55);
+  });
+  reportClipTimeSlider?.addEventListener('change', (event) => commitReportClipTime(event.target.value));
   ['start', 'end'].forEach((bound) => {
     const slider = $(`#batch-erase-${bound}-slider`);
     const input = $(`#batch-erase-${bound}-time`);
