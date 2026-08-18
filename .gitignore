@@ -1,0 +1,9 @@
+# The published deliverable is the browser app in web/.
+# Keep local source media and generated audit data out of the repository.
+sample/
+output/
+tmp/
+
+# The native auditor is a separate local application and may contain credentials.
+label_auditor/
+
