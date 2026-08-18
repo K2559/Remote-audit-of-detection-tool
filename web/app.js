@@ -132,6 +132,7 @@ const state = {
   tableSelection: new Set(),
   windows: [],
   selectedWindow: null,
+  heatmapCache: new Map(),
   report: {
     tenderer: '',
     demonstrationDate: todayIsoDate(),
@@ -1325,6 +1326,7 @@ function statusText(status) {
 
 function markDirty() {
   state.dirty = true;
+  state.heatmapCache.clear();
   updateRecoveryStatus('Autosaving...');
   scheduleRecoveryCheckpoint();
 }
@@ -1486,6 +1488,16 @@ function setFrame(index, { fromHeldNavigation = false } = {}) {
   updateTimelineCursor();
   renderInspector();
   updateActiveClip();
+  if (state.view === 'heatmap') {
+    updateHeatmapTimebars();
+    if (frameReady?.then) {
+      void frameReady.then(() => {
+        if (state.view === 'heatmap') renderHeatmapFrameOnly();
+      });
+    } else {
+      renderHeatmapFrameOnly();
+    }
+  }
   scheduleRecoveryCursor();
   return frameReady;
 }
@@ -2053,7 +2065,7 @@ function createClipThumbnail(clip, edge) {
 
 function updateActiveClip() {
   const activeIndex = currentFrame()?.clip_index ?? 0;
-  $$('#clip-list .clip-row').forEach((row) => {
+  $$('#clip-list .clip-row, #heatmap-clip-list .clip-row').forEach((row) => {
     const active = Number(row.dataset.clipIndex) === activeIndex;
     const changed = active && !row.classList.contains('is-active');
     row.classList.toggle('is-active', active);
@@ -2076,7 +2088,7 @@ function updateClipSelectionUi() {
     if (!Number.isInteger(index) || index < 0 || index >= clips.length) state.clipSelection.delete(index);
   });
   const selected = sortedClipSelection();
-  $$('#clip-list .clip-row').forEach((row) => {
+  $$('#clip-list .clip-row, #heatmap-clip-list .clip-row').forEach((row) => {
     const index = Number(row.dataset.clipIndex);
     const checked = state.clipSelection.has(index);
     row.classList.toggle('is-selected', checked);
@@ -2190,7 +2202,7 @@ function updateVideoTimebar(timeOverride = null) {
     }
     $$('#video-time-segments .video-time-segment').forEach((segment) => segment.classList.toggle('active', Number(segment.dataset.clipIndex) === (frame?.clip_index ?? 0)));
   }
-  $$('#clip-list [data-clip-progress]').forEach((track) => {
+  $$('#clip-list [data-clip-progress], #heatmap-clip-list [data-clip-progress]').forEach((track) => {
     const clip = state.doc?.clips?.[Number(track.dataset.clipProgress)];
     const fill = track.firstElementChild;
     if (!clip || !fill) return;
@@ -2276,11 +2288,12 @@ function updateTimelineBucket(frameIndex) {
   segment.className = `timeline-segment${flagged ? ' flagged' : reviewed ? ' reviewed' : ''}`;
 }
 
-function renderClipSidebar() {
-  const list = $('#clip-list');
+function renderClipSidebar(listSelector = '#clip-list', countSelector = '#clip-count') {
+  const list = $(listSelector);
   if (!list) return;
   const clips = state.doc?.clips || [];
-  $('#clip-count').textContent = clips.length;
+  const count = $(countSelector);
+  if (count) count.textContent = clips.length;
   const signature = clips.map((clip) => `${clip.id}:${clip.start_sec}:${clip.end_sec}`).join('|');
   if (list.dataset.signature === signature && list.childElementCount === clips.length) {
     updateActiveClip();
@@ -2399,12 +2412,19 @@ function renderClipSidebar() {
   updateClipDetectionUi();
 }
 
+function renderHeatmapClipSidebar() {
+  renderClipSidebar('#heatmap-clip-list', '#heatmap-clip-count');
+}
+
 function resetClipThumbnails() {
   pauseClipThumbnailWork();
   state.clipSelection.clear();
   state.clipThumbnails.clear();
-  const list = $('#clip-list');
-  if (list) list.dataset.signature = '';
+  state.heatmapCache.clear();
+  ['#clip-list', '#heatmap-clip-list'].forEach((selector) => {
+    const list = $(selector);
+    if (list) list.dataset.signature = '';
+  });
 }
 
 // Thumbnail seeks use their own decoder, but they still compete for the same
@@ -2454,9 +2474,12 @@ async function prepareClipThumbnails() {
         const thumbnail = await captureClipThumbnail(sourceVideo, time, { signal: controller.signal });
         if (token !== state.clipThumbnailToken || controller.signal.aborted) return;
         state.clipThumbnails.set(key, thumbnail);
-        const list = $('#clip-list');
-        if (list) list.dataset.signature = '';
+        ['#clip-list', '#heatmap-clip-list'].forEach((selector) => {
+          const list = $(selector);
+          if (list) list.dataset.signature = '';
+        });
         renderClipSidebar();
+        renderHeatmapClipSidebar();
       }
     }
   } catch (error) {
@@ -2842,12 +2865,283 @@ function heatColor(value) {
   const hue = 255 - Math.min(220, value * 215); const saturation = 38 + value * 42; const light = 92 - value * 39; return `hsl(${Math.round(hue)}, ${Math.round(saturation)}%, ${Math.round(light)}%)`;
 }
 
+function heatmapFramesForClip(clip) {
+  const frames = state.doc?.frames || [];
+  if (!clip) return frames;
+  const clipIndex = Number(clip.index);
+  const indexed = Number.isInteger(clipIndex)
+    ? frames.filter((frame) => frame.clip_index != null && Number(frame.clip_index) === clipIndex)
+    : [];
+  if (indexed.length) return indexed;
+  const start = Number(clip.start_sec) || 0;
+  const end = Math.max(start, Number(clip.end_sec) || start);
+  const ranged = frames.filter((frame) => {
+    const time = frameTimeline(frame);
+    return time >= start - 0.0001 && (time <= end + 0.0001 || end <= start);
+  });
+  return ranged.length || frames.length === 0 ? ranged : (state.doc.clips?.length === 1 ? frames : ranged);
+}
+
+function heatmapEntriesForFrames(frames) {
+  const entries = [];
+  (frames || []).forEach((frame, frameIndex) => {
+    (frame.detections || []).forEach((detection) => entries.push({ frame, frameIndex, detection }));
+  });
+  const rats = entries.filter(({ detection }) => /(?:^|\b)(rat|rodent|mouse|mice)(?:\b|$)/i.test(String(detection.label || '')));
+  return rats.length ? rats : entries;
+}
+
+function heatmapAggregateForClip(clip) {
+  const frames = heatmapFramesForClip(clip);
+  const entries = heatmapEntriesForFrames(frames);
+  const clipKey = clip ? `${clip.id || clip.index}:${Number(clip.start_sec) || 0}:${Number(clip.end_sec) || 0}` : 'all';
+  const cacheKey = `${clipKey}:${frames.length}:${entries.length}:${videoWidth()}x${videoHeight()}`;
+  const cached = state.heatmapCache.get(cacheKey);
+  if (cached) return cached;
+
+  const columns = 64;
+  const rows = 48;
+  const values = new Float32Array(columns * rows);
+  const framesWithBoxes = new Set();
+  let peak = 0;
+  entries.forEach(({ frame, frameIndex, detection }) => {
+    const box = Array.isArray(detection.bbox_xyxy_pixels) ? detection.bbox_xyxy_pixels.map(Number) : null;
+    if (!box || box.length < 4) return;
+    const x1 = Math.max(0, Math.min(videoWidth(), Math.min(box[0], box[2])));
+    const y1 = Math.max(0, Math.min(videoHeight(), Math.min(box[1], box[3])));
+    const x2 = Math.max(x1, Math.min(videoWidth(), Math.max(box[0], box[2])));
+    const y2 = Math.max(y1, Math.min(videoHeight(), Math.max(box[1], box[3])));
+    if (x2 <= x1 || y2 <= y1) return;
+    framesWithBoxes.add(frame.sample_index ?? frameIndex);
+    const centerX = ((x1 + x2) * 0.5 / videoWidth()) * columns;
+    const centerY = ((y1 + y2) * 0.5 / videoHeight()) * rows;
+    const radiusX = Math.max(1.2, ((x2 - x1) / videoWidth()) * columns * 0.58);
+    const radiusY = Math.max(1.2, ((y2 - y1) / videoHeight()) * rows * 0.58);
+    const minCol = Math.max(0, Math.floor(centerX - radiusX * 2.4));
+    const maxCol = Math.min(columns - 1, Math.ceil(centerX + radiusX * 2.4));
+    const minRow = Math.max(0, Math.floor(centerY - radiusY * 2.4));
+    const maxRow = Math.min(rows - 1, Math.ceil(centerY + radiusY * 2.4));
+    const confidence = Math.max(0.2, Math.min(1, Number(detection.confidence) || 1));
+    const weight = 0.35 + confidence * 0.65;
+    for (let row = minRow; row <= maxRow; row += 1) {
+      for (let col = minCol; col <= maxCol; col += 1) {
+        const dx = (col + 0.5 - centerX) / radiusX;
+        const dy = (row + 0.5 - centerY) / radiusY;
+        const distance = dx * dx + dy * dy;
+        if (distance > 5.8) continue;
+        const contribution = weight * Math.exp(-distance * 0.72);
+        const index = row * columns + col;
+        values[index] += contribution;
+        if (values[index] > peak) peak = values[index];
+      }
+    }
+  });
+  const aggregate = {
+    columns,
+    rows,
+    values,
+    peak,
+    boxCount: entries.length,
+    frameCount: frames.length,
+    framesWithBoxes: framesWithBoxes.size,
+    clip,
+  };
+  state.heatmapCache.set(cacheKey, aggregate);
+  return aggregate;
+}
+
+function heatmapColor(value) {
+  const stops = [
+    [0, [22, 68, 145]],
+    [0.22, [0, 177, 211]],
+    [0.45, [45, 187, 81]],
+    [0.68, [255, 220, 42]],
+    [0.84, [255, 128, 20]],
+    [1, [211, 31, 43]],
+  ];
+  const safe = Math.max(0, Math.min(1, Number(value) || 0));
+  for (let index = 1; index < stops.length; index += 1) {
+    if (safe > stops[index][0]) continue;
+    const [leftStop, leftColor] = stops[index - 1];
+    const [rightStop, rightColor] = stops[index];
+    const ratio = (safe - leftStop) / Math.max(0.0001, rightStop - leftStop);
+    return leftColor.map((channel, colorIndex) => Math.round(channel + (rightColor[colorIndex] - channel) * ratio));
+  }
+  return stops.at(-1)[1];
+}
+
+function heatmapSourceSurface() {
+  const video = $('#frame-video');
+  if (state.videoFile && video?.readyState >= 2 && video.videoWidth) return video;
+  const canvas = $('#frame-canvas');
+  if (canvas && !canvas.hidden && canvas.width && canvas.height) return canvas;
+  const image = $('#frame-image');
+  if (image?.complete && image.naturalWidth) return image;
+  return null;
+}
+
+function heatmapCanvasDimensions(source) {
+  const width = Math.max(1, Number(source?.videoWidth || source?.naturalWidth || source?.width || videoWidth()));
+  const height = Math.max(1, Number(source?.videoHeight || source?.naturalHeight || source?.height || videoHeight()));
+  const scale = Math.min(1, 960 / width, 720 / height);
+  return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+}
+
+function drawHeatmapBackground() {
+  const base = $('#heatmap-base-canvas');
+  const overlay = $('#heatmap-overlay-canvas');
+  if (!base || !overlay) return false;
+  const source = heatmapSourceSurface();
+  const dimensions = heatmapCanvasDimensions(source);
+  if (base.width !== dimensions.width) base.width = dimensions.width;
+  if (base.height !== dimensions.height) base.height = dimensions.height;
+  if (overlay.width !== dimensions.width) overlay.width = dimensions.width;
+  if (overlay.height !== dimensions.height) overlay.height = dimensions.height;
+  const context = base.getContext('2d', { alpha: false });
+  if (!context) return false;
+  context.fillStyle = '#111918';
+  context.fillRect(0, 0, base.width, base.height);
+  if (source) {
+    context.drawImage(source, 0, 0, base.width, base.height);
+    $('#heatmap-source-status').textContent = state.videoFile ? 'Live source frame' : 'Demo source frame';
+  } else {
+    $('#heatmap-source-status').textContent = 'Source frame unavailable';
+  }
+  return Boolean(source);
+}
+
+function drawHeatmapOverlay(aggregate) {
+  const overlay = $('#heatmap-overlay-canvas');
+  if (!overlay) return;
+  const context = overlay.getContext('2d');
+  if (!context) return;
+  context.clearRect(0, 0, overlay.width, overlay.height);
+  if (!aggregate?.peak || !aggregate.values.length) return;
+  const low = document.createElement('canvas');
+  low.width = aggregate.columns;
+  low.height = aggregate.rows;
+  const lowContext = low.getContext('2d');
+  if (!lowContext) return;
+  const pixels = lowContext.createImageData(low.width, low.height);
+  for (let index = 0; index < aggregate.values.length; index += 1) {
+    const normalized = aggregate.values[index] / aggregate.peak;
+    if (normalized < 0.012) continue;
+    const [red, green, blue] = heatmapColor(Math.pow(normalized, 0.78));
+    const offset = index * 4;
+    pixels.data[offset] = red;
+    pixels.data[offset + 1] = green;
+    pixels.data[offset + 2] = blue;
+    pixels.data[offset + 3] = Math.min(238, Math.round(255 * Math.pow(normalized, 0.7)));
+  }
+  lowContext.putImageData(pixels, 0, 0);
+  context.save();
+  context.globalAlpha = 0.82;
+  context.imageSmoothingEnabled = true;
+  context.filter = 'blur(1.2px)';
+  context.drawImage(low, 0, 0, overlay.width, overlay.height);
+  context.restore();
+}
+
+function updateHeatmapTimebars(timeOverride = null) {
+  const frame = currentFrame();
+  const video = $('#frame-video');
+  const duration = Math.max(0, Number(video?.duration) || durationSec());
+  const timeline = Math.max(0, Math.min(duration || durationSec(), Number(timeOverride ?? frameTimeline(frame)) || 0));
+  const globalSlider = $('#heatmap-video-time-slider');
+  if (globalSlider) {
+    globalSlider.disabled = !duration;
+    globalSlider.min = '0';
+    globalSlider.max = String(Math.max(0.001, duration));
+    globalSlider.step = String(Math.max(0.001, 1 / Math.max(1, Number(state.doc?.sampling?.sample_fps) || 5)));
+    globalSlider.value = String(timeline);
+    globalSlider.style.setProperty('--timebar-progress', `${duration ? timeline / duration * 100 : 0}%`);
+    globalSlider.setAttribute('aria-valuetext', `${formatClipClock(timeline)} of ${formatClipClock(duration)}`);
+  }
+  const globalCurrent = $('#heatmap-video-time-current');
+  const globalEnd = $('#heatmap-video-time-end');
+  if (globalCurrent) globalCurrent.textContent = formatClipClock(timeline);
+  if (globalEnd) globalEnd.textContent = formatClipClock(duration);
+  const segments = $('#heatmap-video-time-segments');
+  if (segments) {
+    const signature = `${duration}:${(state.doc?.clips || []).map((clip) => `${clip.start_sec}:${clip.end_sec}`).join('|')}`;
+    if (segments.dataset.signature !== signature) {
+      segments.dataset.signature = signature;
+      segments.replaceChildren();
+      (state.doc?.clips || []).forEach((clip, index) => {
+        const segment = document.createElement('span');
+        segment.className = 'video-time-segment';
+        segment.dataset.clipIndex = String(index);
+        segment.style.left = `${duration ? Math.max(0, Number(clip.start_sec) || 0) / duration * 100 : 0}%`;
+        segment.style.width = `${duration ? Math.max(0, Number(clip.end_sec) - Number(clip.start_sec)) / duration * 100 : 0}%`;
+        segments.append(segment);
+      });
+    }
+    $$('#heatmap-video-time-segments .video-time-segment').forEach((segment) => segment.classList.toggle('active', Number(segment.dataset.clipIndex) === Number(frame?.clip_index ?? 0)));
+  }
+  const clip = activeClip();
+  const clipSlider = $('#heatmap-clip-time-slider');
+  const clipPosition = clip ? clipTimebarPosition(clip, timeline) : { current: 0, duration: 0 };
+  if (clipSlider) {
+    clipSlider.disabled = !clip || clipPosition.duration <= 0;
+    clipSlider.min = '0';
+    clipSlider.max = String(Math.max(0.001, clipPosition.duration));
+    clipSlider.step = String(Math.max(0.001, 1 / Math.max(1, Number(state.doc?.sampling?.sample_fps) || 5)));
+    clipSlider.value = String(clipPosition.current);
+    clipSlider.style.setProperty('--timebar-progress', `${clipPosition.duration ? clipPosition.current / clipPosition.duration * 100 : 0}%`);
+  }
+  const clipIndex = clip ? Math.max(0, Number(clip.index) || 0) : 0;
+  const clipLabel = $('#heatmap-clip-time-label');
+  const clipCurrent = $('#heatmap-clip-time-current');
+  const clipEnd = $('#heatmap-clip-time-end');
+  if (clipLabel) clipLabel.textContent = clip ? `Clip ${clipIndex + 1}` : 'Clip';
+  if (clipCurrent) clipCurrent.textContent = formatTime(clipPosition.current);
+  if (clipEnd) clipEnd.textContent = formatTime(clipPosition.duration);
+  $$('#heatmap-clip-list [data-clip-progress]').forEach((track) => {
+    const item = state.doc?.clips?.[Number(track.dataset.clipProgress)];
+    const fill = track.firstElementChild;
+    if (!item || !fill) return;
+    const span = Math.max(0.001, Number(item.end_sec) - Number(item.start_sec));
+    fill.style.width = `${Math.max(0, Math.min(1, (timeline - Number(item.start_sec)) / span)) * 100}%`;
+  });
+}
+
+function renderHeatmapFrameOnly() {
+  if (!state.doc || state.view !== 'heatmap') return;
+  const clip = activeClip();
+  const aggregate = heatmapAggregateForClip(clip);
+  updateHeatmapTimebars();
+  drawHeatmapBackground();
+  drawHeatmapOverlay(aggregate);
+  const frame = currentFrame();
+  const frameStatus = $('#heatmap-frame-status');
+  if (frameStatus) frameStatus.textContent = frame ? `Frame ${frame.sample_index} / ${formatClipClock(frameTimeline(frame))}` : 'No frame';
+}
+
 function renderHeatmap() {
-  const selected = state.windows.find((window) => window.id === state.selectedWindow) || state.windows[0]; const canvas = $('#heatmap-canvas'); canvas.replaceChildren(); const cells = Array.from({ length: 96 }, () => 0); let count = 0;
-  if (selected) selected.frames.forEach((frame) => frame.detections.forEach((detection) => { const box = detection.bbox_xyxy_pixels; const left = Math.max(0, Math.min(11, Math.floor(box[0] / videoWidth() * 12))); const right = Math.max(left, Math.min(11, Math.ceil(box[2] / videoWidth() * 12) - 1)); const top = Math.max(0, Math.min(7, Math.floor(box[1] / videoHeight() * 8))); const bottom = Math.max(top, Math.min(7, Math.ceil(box[3] / videoHeight() * 8) - 1)); count += 1; for (let row = top; row <= bottom; row += 1) for (let col = left; col <= right; col += 1) cells[row * 12 + col] += 1; }));
-  const peak = Math.max(1, ...cells); cells.forEach((value) => { const cell = document.createElement('span'); cell.className = 'heat-cell'; cell.style.background = heatColor(value / peak); canvas.append(cell); });
-  $('#heatmap-summary').textContent = `${count} ${count === 1 ? 'box' : 'boxes'}`; $('#heatmap-title').textContent = selected ? `Clip ${selected.clipIndex + 1} / ${formatTime(selected.localStart).slice(0, 8)} - ${formatTime(selected.localStart + (selected.end - selected.start)).slice(0, 8)}` : 'No confirmed windows';
-  const list = $('#window-list'); list.replaceChildren(); if (!state.windows.length) { const empty = document.createElement('div'); empty.className = 'muted-copy'; empty.style.padding = '15px 8px'; empty.textContent = 'Accept or edit a frame to create a heatmap window.'; list.append(empty); } else state.windows.forEach((window) => { const row = document.createElement('button'); row.type = 'button'; row.className = `window-row${state.selectedWindow === window.id ? ' selected' : ''}`; row.addEventListener('click', () => { state.selectedWindow = window.id; renderHeatmap(); }); const swatch = document.createElement('span'); swatch.className = 'window-swatch'; const copy = document.createElement('span'); copy.className = 'window-row-copy'; const title = document.createElement('span'); title.className = 'window-title'; title.textContent = `Clip ${window.clipIndex + 1} / ${formatTime(window.localStart).slice(0, 8)} - ${formatTime(window.localStart + (window.end - window.start)).slice(0, 8)}`; const detail = document.createElement('span'); detail.className = 'window-detail'; detail.textContent = `${window.frames.length} confirmed frames`; copy.append(title, detail); const countNode = document.createElement('span'); countNode.className = 'window-count'; countNode.textContent = String(window.boxes); row.append(swatch, copy, countNode); list.append(row); }); $('#delete-window-button').disabled = !selected;
+  if (!state.doc) return;
+  renderHeatmapClipSidebar();
+  const clip = activeClip();
+  const aggregate = heatmapAggregateForClip(clip);
+  const clipIndex = clip ? Number(clip.index) || 0 : 0;
+  const title = $('#heatmap-title');
+  const caption = $('#heatmap-frame-caption');
+  const summary = $('#heatmap-summary');
+  const summaryClip = $('#heatmap-summary-clip');
+  const boxCount = $('#heatmap-box-count');
+  const frameCount = $('#heatmap-frame-count');
+  const coverage = $('#heatmap-coverage');
+  const detail = $('#heatmap-summary-detail');
+  const empty = $('#heatmap-empty');
+  if (title) title.textContent = clip ? `Clip ${clipIndex + 1} / ${formatClipClock(clip.start_sec)} - ${formatClipClock(clip.end_sec)}` : 'No clip selected';
+  if (caption) caption.textContent = clip ? `All ${aggregate.boxCount.toLocaleString()} rat detections across this clip are combined into one field.` : 'The overlay combines detections from the full active clip.';
+  if (summary) summary.textContent = `${aggregate.boxCount.toLocaleString()} ${aggregate.boxCount === 1 ? 'box' : 'boxes'}`;
+  if (summaryClip) summaryClip.textContent = clip ? `Clip ${clipIndex + 1}` : 'None';
+  if (boxCount) boxCount.textContent = aggregate.boxCount.toLocaleString();
+  if (frameCount) frameCount.textContent = aggregate.framesWithBoxes.toLocaleString();
+  if (coverage) coverage.textContent = `${aggregate.frameCount ? Math.round(aggregate.framesWithBoxes / aggregate.frameCount * 100) : 0}%`;
+  if (detail) detail.textContent = clip ? `The grayscale frame is the current source position. The colored field is aggregated from every detection in Clip ${clipIndex + 1}.` : 'Select a clip to build the aggregate heatmap.';
+  if (empty) empty.hidden = Boolean(aggregate.boxCount);
+  renderHeatmapFrameOnly();
 }
 
 function flattenLabels() {
@@ -3688,7 +3982,15 @@ function renderAll() {
   renderDocumentInfo();
   renderProgress();
   if (state.view === 'review') { renderClipSidebar(); renderFrame(); renderInspector(); renderTimeline(); }
-  else if (state.view === 'heatmap') renderHeatmap();
+  else if (state.view === 'heatmap') {
+    const frameReady = renderFrame();
+    renderHeatmap();
+    if (frameReady?.then) {
+      void frameReady.then((ready) => {
+        if (ready && state.view === 'heatmap') renderHeatmapFrameOnly();
+      });
+    }
+  }
   else if (state.view === 'table') renderTable();
   else if (state.view === 'report') renderReport();
 }
@@ -3961,7 +4263,7 @@ function bindEvents() {
     else if (action === 'open-clip-dialog') openClipDialog();
     else if (action === 'close-clip-dialog') closeClipDialog();
     else if (action === 'apply-clip-cuts' && !applyDocumentClipCuts($('#clip-cuts-input').value)) showToast('Enter clip starts inside the source video duration', 'error');
-    else if (action === 'generate-heatmap') { buildWindows(); renderHeatmap(); showToast('Heatmap regenerated', 'success'); }
+    else if (action === 'generate-heatmap') { state.heatmapCache.clear(); renderHeatmap(); showToast('Clip heatmap regenerated', 'success'); }
     else if (action === 'add-window') addHeatmapWindow();
     else if (action === 'delete-window') deleteHeatmapWindow();
     else if (action === 'delete-selected') deleteSelectedRows();
@@ -3973,7 +4275,14 @@ function bindEvents() {
   $('#json-input').addEventListener('change', async (event) => { const files = [...(event.target.files || [])]; event.target.value = ''; await handleFiles(files); });
   $('#video-input')?.addEventListener('change', async (event) => { const video = event.target.files?.[0]; event.target.value = ''; if (video) await handleFiles([video]); });
   const frameVideo = $('#frame-video');
-  frameVideo.addEventListener('loadedmetadata', () => { renderFrame(); if (state.view === 'report') renderReport(); });
+  frameVideo.addEventListener('loadedmetadata', () => {
+    const frameReady = renderFrame();
+    if (state.view === 'heatmap') {
+      if (frameReady?.then) void frameReady.then(() => renderHeatmapFrameOnly());
+      else renderHeatmapFrameOnly();
+    }
+    if (state.view === 'report') renderReport();
+  });
   frameVideo.addEventListener('seeking', () => setVideoSeeking(true));
   frameVideo.addEventListener('error', () => { if (state.videoFile) showVideoError('Video could not be decoded'); });
   $('#timeline-slider').addEventListener('input', (event) => setFrame(Number(event.target.value)));
@@ -4019,6 +4328,48 @@ function bindEvents() {
     state.clipTimeScrubTimer = setTimeout(() => commitClipTime(localTime, clip), 70);
   });
   clipTimeSlider?.addEventListener('change', (event) => commitClipTime(event.target.value));
+  const heatmapVideoTimeSlider = $('#heatmap-video-time-slider');
+  const commitHeatmapVideoTime = (value) => {
+    const time = Math.max(0, Number(value) || 0);
+    clearTimeout(state.videoTimeScrubTimer);
+    clearTimeout(state.clipTimeScrubTimer);
+    state.videoTimeScrubTimer = null;
+    state.clipTimeScrubTimer = null;
+    const index = nearestFrameIndexAtTimeline(time);
+    if (index >= 0) setFrame(index);
+  };
+  heatmapVideoTimeSlider?.addEventListener('input', (event) => {
+    const time = Number(event.target.value) || 0;
+    updateHeatmapTimebars(time);
+    clearTimeout(state.clipTimeScrubTimer);
+    clearTimeout(state.videoTimeScrubTimer);
+    state.videoTimeScrubTimer = setTimeout(() => commitHeatmapVideoTime(time), 55);
+  });
+  heatmapVideoTimeSlider?.addEventListener('change', (event) => commitHeatmapVideoTime(event.target.value));
+  const heatmapClipTimeSlider = $('#heatmap-clip-time-slider');
+  const commitHeatmapClipTime = (value, clip = activeClip()) => {
+    if (!clip) return;
+    const start = Math.max(0, Number(clip.start_sec) || 0);
+    const target = clipTimebarPosition(clip, start + Math.max(0, Number(value) || 0)).timeline;
+    clearTimeout(state.clipTimeScrubTimer);
+    clearTimeout(state.videoTimeScrubTimer);
+    state.clipTimeScrubTimer = null;
+    state.videoTimeScrubTimer = null;
+    const index = nearestFrameIndexAtTimeline(target, clip);
+    if (index >= 0) setFrame(index);
+  };
+  heatmapClipTimeSlider?.addEventListener('input', (event) => {
+    const clip = activeClip();
+    if (!clip) return;
+    const start = Math.max(0, Number(clip.start_sec) || 0);
+    const localTime = Math.max(0, Number(event.target.value) || 0);
+    const target = clipTimebarPosition(clip, start + localTime).timeline;
+    updateHeatmapTimebars(target);
+    clearTimeout(state.videoTimeScrubTimer);
+    clearTimeout(state.clipTimeScrubTimer);
+    state.clipTimeScrubTimer = setTimeout(() => commitHeatmapClipTime(localTime, clip), 55);
+  });
+  heatmapClipTimeSlider?.addEventListener('change', (event) => commitHeatmapClipTime(event.target.value));
   ['start', 'end'].forEach((bound) => {
     const slider = $(`#batch-erase-${bound}-slider`);
     const input = $(`#batch-erase-${bound}-time`);

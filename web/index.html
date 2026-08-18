@@ -247,16 +247,55 @@
 
         <section id="heatmap-view" class="view-panel alternate-view" data-view-panel="heatmap" hidden>
           <div class="view-heading compact-heading task-heading">
-            <div><div class="section-kicker">CONFIRMED LABELS</div><h1>Heatmap</h1></div>
+            <div><div class="section-kicker">CLIP-WIDE DETECTIONS</div><h1>Heatmap</h1></div>
             <div class="heading-actions"><button class="button button-primary" type="button" data-action="generate-heatmap"><span class="icon" data-icon="refresh"></span><span>Regenerate</span></button></div>
           </div>
           <div class="heatmap-layout">
-            <section class="heatmap-card">
-              <div class="heatmap-card-header"><div><span class="section-kicker">OCCUPANCY FIELD</span><h2 id="heatmap-title">Confirmed detections</h2></div><span class="status-badge status-badge-mint" id="heatmap-summary">0 boxes</span></div>
-              <div class="heatmap-canvas-wrap"><div class="heatmap-canvas" id="heatmap-canvas"></div><div class="heatmap-axis axis-x"><span>left</span><span>center</span><span>right</span></div><div class="heatmap-axis axis-y"><span>top</span><span>mid</span><span>bottom</span></div></div>
-              <div class="heatmap-scale"><span>low</span><div class="scale-bar"></div><span>high</span></div>
+            <aside class="clip-sidebar heatmap-clip-sidebar" aria-label="Heatmap video clips">
+              <div class="clip-sidebar-header">
+                <div><span class="section-kicker">SOURCE</span><h2>Clips</h2></div>
+                <span id="heatmap-clip-count" class="clip-count">0</span>
+              </div>
+              <div id="heatmap-clip-list" class="clip-list clip-list-instance"></div>
+            </aside>
+
+            <section class="heatmap-card" aria-label="Clip-wide heatmap">
+              <div class="heatmap-card-header">
+                <div><span class="section-kicker">AGGREGATED TRACK</span><h2 id="heatmap-title">Select a clip</h2><p id="heatmap-frame-caption" class="heatmap-frame-caption">The overlay combines detections from the full active clip.</p></div>
+                <span class="status-badge status-badge-mint" id="heatmap-summary">0 boxes</span>
+              </div>
+              <div class="heatmap-canvas-wrap heatmap-overlay-wrap">
+                <canvas id="heatmap-base-canvas" class="heatmap-base-canvas" aria-label="Grayscale source frame"></canvas>
+                <canvas id="heatmap-overlay-canvas" class="heatmap-overlay-canvas" aria-label="Aggregated detection heatmap"></canvas>
+                <div id="heatmap-empty" class="heatmap-empty" hidden>Select a clip with detections to build the aggregate heatmap.</div>
+                <div class="heatmap-overlay-badge"><span class="status-dot"></span><span>Full clip aggregate</span></div>
+              </div>
+              <div class="heatmap-scale" aria-label="Heatmap intensity legend"><span>low</span><div class="scale-bar"></div><span>high</span></div>
+              <div class="heatmap-timebar-stack" aria-label="Heatmap frame navigation timelines">
+                <div class="video-timebar clip-timebar" aria-label="Active clip timeline">
+                  <span id="heatmap-clip-time-label" class="video-timebar-label">Clip</span>
+                  <div class="video-timebar-track"><input id="heatmap-clip-time-slider" class="video-time-slider" type="range" min="0" max="1" value="0" step="0.2" aria-label="Heatmap time within active clip" /></div>
+                  <span class="video-timebar-value"><span id="heatmap-clip-time-current">00:00:00.0</span><span class="video-time-separator"> / </span><span id="heatmap-clip-time-end">00:00:00.0</span></span>
+                </div>
+                <div class="video-timebar global-timebar" aria-label="Full video timeline">
+                  <span class="video-timebar-label">Video</span>
+                  <div class="video-timebar-track"><div id="heatmap-video-time-segments" class="video-time-segments" aria-hidden="true"></div><input id="heatmap-video-time-slider" class="video-time-slider" type="range" min="0" max="1" value="0" step="0.2" aria-label="Heatmap full video time" /></div>
+                  <span class="video-timebar-value"><span id="heatmap-video-time-current">00:00:00</span><span class="video-time-separator"> / </span><span id="heatmap-video-time-end">00:00:00</span></span>
+                </div>
+              </div>
+              <div class="heatmap-footer"><span id="heatmap-frame-status">Frame 0</span><span class="toolbar-divider"></span><span id="heatmap-source-status">Grayscale source</span></div>
             </section>
-            <aside class="window-card"><div class="window-card-header"><div><span class="section-kicker">WINDOWS</span><h2>Review periods</h2></div><button class="icon-button compact" type="button" data-action="add-window" aria-label="Add heatmap window" data-tooltip="Add window"><span class="icon" data-icon="plus"></span></button></div><div id="window-list" class="window-list"></div><div class="window-card-footer"><button class="button button-small button-danger" type="button" data-action="delete-window" id="delete-window-button" disabled><span class="icon" data-icon="trash"></span><span>Delete selected</span></button></div></aside>
+
+            <aside class="window-card heatmap-summary-card" aria-label="Heatmap summary">
+              <div class="window-card-header"><div><span class="section-kicker">CLIP SUMMARY</span><h2>Detection field</h2></div><span class="status-badge status-badge-mint">AGGREGATE</span></div>
+              <div class="heatmap-summary-body">
+                <div class="heatmap-stat"><span>CLIP</span><strong id="heatmap-summary-clip">Clip 1</strong></div>
+                <div class="heatmap-stat"><span>BOXES</span><strong id="heatmap-box-count">0</strong></div>
+                <div class="heatmap-stat"><span>FRAMES WITH BOXES</span><strong id="heatmap-frame-count">0</strong></div>
+                <div class="heatmap-stat"><span>CLIP COVERAGE</span><strong id="heatmap-coverage">0%</strong></div>
+                <p id="heatmap-summary-detail" class="muted-copy">Every detection in the active clip contributes to this field. Click a thumbnail or scrub either time bar to inspect the source frame.</p>
+              </div>
+            </aside>
           </div>
         </section>
 
