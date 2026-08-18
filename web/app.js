@@ -26,6 +26,8 @@ const ICON_PATHS = {
   search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
   report: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 12h6M9 16h6"/>',
   printer: '<path d="M7 9V3h10v6M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2"/><path d="M7 14h10v7H7z"/>',
+  layers: '<path d="m12 3 8 4-8 4-8-4 8-4Z"/><path d="m4 12 8 4 8-4M4 17l8 4 8-4"/>',
+  'check-square': '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="m8 12 2.5 2.5L16 9"/>',
   close: '<path d="m6 6 12 12M18 6 6 18"/>',
 };
 
@@ -151,6 +153,8 @@ const state = {
     clips: [],
     clipCutsText: '',
     selectedClipId: null,
+    selectedClipIds: [],
+    batchPrint: false,
     captures: [],
     baseImages: {},
     preparing: false,
@@ -220,6 +224,7 @@ function createRecoverySnapshot(savedAt = new Date().toISOString()) {
       clips: state.report.clips,
       clipCutsText: state.report.clipCutsText,
       selectedClipId: state.report.selectedClipId,
+      selectedClipIds: state.report.selectedClipIds,
     },
   };
 }
@@ -437,11 +442,16 @@ function applyRecoveryCheckpoint(checkpoint) {
     clips: Array.isArray(savedReport.clips) ? savedReport.clips : [],
     clipCutsText: String(savedReport.clipCutsText || ''),
     selectedClipId: savedReport.selectedClipId ? String(savedReport.selectedClipId) : null,
+    selectedClipIds: Array.isArray(savedReport.selectedClipIds) ? savedReport.selectedClipIds.map(String) : [],
+    batchPrint: false,
     captures: [],
     baseImages: {},
     preparing: false,
     preparePromise: null,
   };
+  if (!state.report.selectedClipIds.length && state.report.clips.length) {
+    state.report.selectedClipIds = state.report.clips.map((clip) => String(clip.id));
+  }
   state.recoveryRestored = true;
   state.recoveryVideo = checkpoint.video && typeof checkpoint.video === 'object' ? checkpoint.video : null;
   state.recoverySavedAt = String(checkpoint.savedAt || '');
@@ -3554,6 +3564,8 @@ function resetReportClips() {
   if (source.length === 1 && source[0].start_sec <= 0.001 && duration > source[0].end_sec) source[0].end_sec = duration;
   state.report.clips = source.length ? source : [{ id: 'clip-1', index: 0, name: 'Clip 1', start_sec: 0, end_sec: duration, source: 'report' }];
   state.report.selectedClipId = state.report.clips[0]?.id || null;
+  state.report.selectedClipIds = state.report.clips.map((clip) => String(clip.id));
+  state.report.batchPrint = false;
   state.report.clipCutsText = state.report.clips.slice(1).map((clip) => formatClock(clip.start_sec)).join(', ');
   state.report.captures = [];
   state.report.baseImages = {};
@@ -3576,6 +3588,10 @@ function applyReportClipCuts(value) {
   const bounds = [0, ...cuts, duration];
   state.report.clips = bounds.slice(0, -1).map((start, index) => ({ id: `clip-${index + 1}`, index, name: `Clip ${index + 1}`, start_sec: start, end_sec: bounds[index + 1], source: 'manual' }));
   state.report.selectedClipId = state.report.clips.find((clip) => clip.id === state.report.selectedClipId)?.id || state.report.clips[0]?.id || null;
+  const selectedIds = new Set((state.report.selectedClipIds || []).map(String));
+  const preservedSelection = state.report.clips.filter((clip) => selectedIds.has(String(clip.id))).map((clip) => String(clip.id));
+  state.report.selectedClipIds = preservedSelection.length ? preservedSelection : state.report.clips.map((clip) => String(clip.id));
+  state.report.batchPrint = false;
   state.report.clipCutsText = String(value || '');
   state.report.captures = [];
   state.report.baseImages = {};
@@ -3594,6 +3610,37 @@ function reportSelectedClip() {
   return selected;
 }
 
+function reportBatchSelectedClips() {
+  const selectedIds = new Set((state.report.selectedClipIds || []).map(String));
+  return reportClips().filter((clip) => selectedIds.has(String(clip.id)));
+}
+
+function reportPreviewClips() {
+  const active = reportSelectedClip();
+  if (!state.report.batchPrint) return active ? [active] : [];
+  const selected = reportBatchSelectedClips();
+  return selected.length ? selected : (active ? [active] : []);
+}
+
+function toggleReportClipSelection(clipId, checked) {
+  const clips = reportClips();
+  const selected = new Set((state.report.selectedClipIds || []).map(String));
+  if (checked) selected.add(String(clipId)); else selected.delete(String(clipId));
+  state.report.selectedClipIds = clips.filter((clip) => selected.has(String(clip.id))).map((clip) => String(clip.id));
+  markDirty();
+  updateReportClipSidebarUi();
+  renderReportSummaryPages();
+}
+
+function selectAllReportClips() {
+  state.report.selectedClipIds = reportClips().map((clip) => String(clip.id));
+  state.report.batchPrint = false;
+  markDirty();
+  updateReportClipSidebarUi();
+  renderReportSummaryPages();
+  showToast(`${state.report.selectedClipIds.length} clips selected for batch output`, 'success');
+}
+
 function reportClipFrameIndex(clip, edge = 'start') {
   if (!clip) return -1;
   const sampleStep = reviewSampleStep();
@@ -3605,7 +3652,7 @@ function reportClipFrameIndex(clip, edge = 'start') {
 
 function reportFocusSection(clip = reportSelectedClip()) {
   if (!clip) return;
-  const section = [...$$('#report-heatmap-pages [data-clip-id]')].find((item) => item.dataset.clipId === clip.id);
+  const section = [...$$('#report-summary-pages [data-clip-id]')].find((item) => item.dataset.clipId === clip.id);
   section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
@@ -3650,6 +3697,7 @@ function reportClipThumbnail(clip, edge) {
 
 function updateReportClipSidebarUi(timelineOverride = null) {
   const selected = reportSelectedClip();
+  const selectedIds = new Set((state.report.selectedClipIds || []).map(String));
   const timeline = Math.max(0, Number(timelineOverride ?? frameTimeline(currentFrame())) || 0);
   $$('#report-clip-list .report-clip-row').forEach((row) => {
     const clip = reportClips().find((item) => item.id === row.dataset.reportClipId);
@@ -3660,7 +3708,15 @@ function updateReportClipSidebarUi(timelineOverride = null) {
     const fill = row.querySelector('.report-clip-progress > span');
     const duration = Math.max(0.001, Number(clip.end_sec) - Number(clip.start_sec));
     if (fill) fill.style.width = `${Math.max(0, Math.min(1, (timeline - Number(clip.start_sec)) / duration)) * 100}%`;
+    const checkbox = row.querySelector('.report-clip-select-checkbox');
+    if (checkbox) checkbox.checked = selectedIds.has(String(clip.id));
   });
+  const count = $('#report-selected-clip-count');
+  if (count) count.textContent = `${selectedIds.size} selected`;
+  const previewTitle = $('#report-preview-title');
+  const previewNote = $('#report-preview-note');
+  if (previewTitle) previewTitle.textContent = state.report.batchPrint ? `${selectedIds.size || 1} clip report${selectedIds.size === 1 ? '' : 's'}` : `${selected?.name || 'Clip'} report`;
+  if (previewNote) previewNote.textContent = state.report.batchPrint ? 'Batch preview: one A4 report per selected clip' : 'One clip per report';
 }
 
 function renderReportClipSidebar() {
@@ -3689,6 +3745,18 @@ function renderReportClipSidebar() {
     row.dataset.reportClipId = clip.id;
     row.setAttribute('aria-label', `View ${clip.name}, ${formatClipClock(clip.start_sec)} to ${formatClipClock(clip.end_sec)}`);
 
+    const rowHeader = document.createElement('div');
+    rowHeader.className = 'report-clip-row-header';
+    const selectLabel = document.createElement('label');
+    selectLabel.className = 'report-clip-select';
+    selectLabel.title = `Include ${clip.name} in batch output`;
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'report-clip-select-checkbox';
+    checkbox.checked = new Set((state.report.selectedClipIds || []).map(String)).has(String(clip.id));
+    checkbox.setAttribute('aria-label', `Include ${clip.name} in batch output`);
+    selectLabel.append(checkbox);
+
     const heading = document.createElement('button');
     heading.type = 'button';
     heading.className = 'report-clip-row-heading';
@@ -3709,7 +3777,10 @@ function renderReportClipSidebar() {
     const progress = document.createElement('div');
     progress.className = 'report-clip-progress';
     progress.append(document.createElement('span'));
-    row.append(heading, thumbnails, range, progress);
+    rowHeader.append(selectLabel, heading);
+    row.append(rowHeader, thumbnails, range, progress);
+    checkbox.addEventListener('click', (event) => event.stopPropagation());
+    checkbox.addEventListener('change', (event) => toggleReportClipSelection(clip.id, event.target.checked));
     heading.addEventListener('click', (event) => {
       event.stopPropagation();
       setReportSelectedClip(clip, { focus: true });
@@ -3936,10 +4007,12 @@ function renderReportCompliance() {
 
 function renderReportCountLog() {
   const body = $('#report-count-log');
+  if (!body) return;
   body.replaceChildren();
   let missing = 0;
   let total = 0;
-  reportClips().forEach((clip) => {
+  const clips = reportPreviewClips();
+  clips.forEach((clip) => {
     clipTimepoints(clip, 120).forEach((time) => {
       total += 1;
       const frame = nearestFrameInClip(clip, time, reportSampleTolerance());
@@ -3955,7 +4028,139 @@ function renderReportCountLog() {
       body.append(row);
     });
   });
-  $('#report-count-note').textContent = missing ? `${missing} of ${total} time points have no matching sampled frame.` : `${total} time points across ${reportClips().length} ${reportClips().length === 1 ? 'clip' : 'clips'} matched to sampled frames.`;
+  $('#report-count-note').textContent = missing ? `${missing} of ${total} time points have no matching sampled frame.` : `${total} time points across ${clips.length} ${clips.length === 1 ? 'clip' : 'clips'} matched to sampled frames.`;
+}
+
+function reportClipFrames(clip) {
+  const start = Number(clip?.start_sec) || 0;
+  const end = Number(clip?.end_sec) || start;
+  return (state.doc?.frames || []).filter((frame) => {
+    const time = frameTimeline(frame);
+    return time >= start - 0.001 && time <= end + 0.001;
+  });
+}
+
+function reportMetricDisplay(value) {
+  return value == null ? 'Not entered' : value.toFixed(3);
+}
+
+function reportMetricState(value, threshold) {
+  if (value == null) return ['NOT ASSESSED', 'pending'];
+  return value > threshold ? ['PASS', 'pass'] : ['FAIL', 'fail'];
+}
+
+function renderReportSummaryPages() {
+  const root = $('#report-summary-pages');
+  if (!root) return;
+  root.replaceChildren();
+  const clips = reportPreviewClips();
+  const metrics = calculateReportMetrics();
+  const sourceName = state.sourceJsonName || state.videoFile?.name || 'Not entered';
+
+  clips.forEach((clip) => {
+    const frames = reportClipFrames(clip);
+    const detections = frames.reduce((sum, frame) => sum + (frame.detections?.length || 0), 0);
+    const overview = document.createElement('section');
+    overview.className = 'report-sheet report-summary-sheet';
+    overview.dataset.clipId = clip.id;
+    overview.innerHTML = `
+      <div class="report-running-head"><strong>Thermal audit report</strong><span data-summary-clip></span></div>
+      <h2>FEHQ 1019/26 rodent detection report</h2>
+      <div class="report-reference">Tender output for one video clip</div>
+      <div class="report-meta-grid">
+        <span>Name of Tenderer</span><strong data-summary-tenderer></strong>
+        <span>Date of Demonstration</span><strong data-summary-date></strong>
+        <span>Source label file</span><strong data-summary-source></strong>
+        <span>Clip coverage</span><strong data-summary-range></strong>
+        <span>Sampled frames</span><strong data-summary-frames></strong>
+        <span>Detection boxes</span><strong data-summary-detections></strong>
+      </div>
+      <h3>Calculated detection results</h3>
+      <table class="report-table report-metric-table"><thead><tr><th>Indicator</th><th>Result</th><th>Status</th></tr></thead><tbody></tbody></table>
+      <h3>Camera and system declarations</h3>
+      <table class="report-table report-compliance-table"><thead><tr><th>Item</th><th>Mandatory feature</th><th>Declaration</th></tr></thead><tbody></tbody></table>
+      <p class="report-note" data-summary-note></p>`;
+    overview.querySelector('[data-summary-clip]').textContent = `${clip.name} / ${formatClipClock(clip.start_sec)}-${formatClipClock(clip.end_sec)}`;
+    overview.querySelector('[data-summary-tenderer]').textContent = state.report.tenderer.trim() || 'Not entered';
+    overview.querySelector('[data-summary-date]').textContent = formatReportDate(state.report.demonstrationDate);
+    overview.querySelector('[data-summary-source]').textContent = sourceName;
+    overview.querySelector('[data-summary-range]').textContent = `${formatClipClock(clip.start_sec)} to ${formatClipClock(clip.end_sec)} (${formatTime(Math.max(0, clip.end_sec - clip.start_sec))})`;
+    overview.querySelector('[data-summary-frames]').textContent = frames.length.toLocaleString();
+    overview.querySelector('[data-summary-detections]').textContent = detections.toLocaleString();
+
+    const metricBody = overview.querySelector('.report-metric-table tbody');
+    [
+      ['Precision', metrics.precision, 0.8],
+      ['Recall', metrics.recall, 0.8],
+      ['Mean IoU', metrics.iou, 0.2],
+    ].forEach(([label, value, threshold]) => {
+      const row = document.createElement('tr');
+      const labelCell = document.createElement('td');
+      labelCell.textContent = label;
+      const valueCell = document.createElement('td');
+      valueCell.textContent = reportMetricDisplay(value);
+      const statusCell = document.createElement('td');
+      const status = document.createElement('span');
+      const [text, className] = reportMetricState(value, threshold);
+      status.className = `report-status ${className}`;
+      status.textContent = text;
+      statusCell.append(status);
+      row.append(labelCell, valueCell, statusCell);
+      metricBody.append(row);
+    });
+
+    const complianceBody = overview.querySelector('.report-compliance-table tbody');
+    REPORT_REQUIREMENTS.forEach((item) => {
+      const checked = Boolean(state.report.compliance[item.id]);
+      const row = document.createElement('tr');
+      const code = document.createElement('td');
+      code.textContent = item.code;
+      const requirement = document.createElement('td');
+      requirement.textContent = item.requirement;
+      const statusCell = document.createElement('td');
+      const status = document.createElement('span');
+      status.className = `report-status ${checked ? 'pass' : 'pending'}`;
+      status.textContent = checked ? 'DECLARED COMPLIANT' : 'NOT ASSESSED';
+      statusCell.append(status);
+      row.append(code, requirement, statusCell);
+      complianceBody.append(row);
+    });
+    overview.querySelector('[data-summary-note]').textContent = `${clip.name} is reported independently. It contains ${frames.length.toLocaleString()} sampled frame${frames.length === 1 ? '' : 's'} and ${detections.toLocaleString()} labelled detection ${detections === 1 ? 'box' : 'boxes'}.`;
+    root.append(overview);
+
+    const countPage = document.createElement('section');
+    countPage.className = 'report-sheet report-count-sheet';
+    countPage.dataset.clipId = clip.id;
+    countPage.innerHTML = `
+      <div class="report-running-head"><strong>Thermal audit report</strong><span data-summary-clip></span></div>
+      <h2>${clip.name} count log</h2>
+      <div class="report-reference">Sampled every 2 minutes within this clip</div>
+      <div class="report-meta-grid report-meta-compact"><span>Clip coverage</span><strong data-summary-range></strong><span>Source label file</span><strong data-summary-source></strong></div>
+      <h3>Detection count by time point</h3>
+      <table class="report-table report-count-table"><thead><tr><th>Time in clip</th><th>Source frame</th><th>Detections</th></tr></thead><tbody></tbody></table>
+      <p class="report-note" data-summary-note></p>`;
+    countPage.querySelector('[data-summary-clip]').textContent = `${clip.name} / ${formatClipClock(clip.start_sec)}-${formatClipClock(clip.end_sec)}`;
+    countPage.querySelector('[data-summary-range]').textContent = `${formatClipClock(clip.start_sec)} to ${formatClipClock(clip.end_sec)}`;
+    countPage.querySelector('[data-summary-source]').textContent = sourceName;
+    const countBody = countPage.querySelector('tbody');
+    let missing = 0;
+    const points = clipTimepoints(clip, 120);
+    points.forEach((time) => {
+      const frame = nearestFrameInClip(clip, time, reportSampleTolerance());
+      if (!frame) missing += 1;
+      const row = document.createElement('tr');
+      const timeCell = document.createElement('td');
+      timeCell.textContent = formatClock(time);
+      const frameCell = document.createElement('td');
+      frameCell.textContent = frame ? String(frame.sample_index ?? '-') : '-';
+      const countCell = document.createElement('td');
+      countCell.textContent = frame ? String(frame.detections.length) : '-';
+      row.append(timeCell, frameCell, countCell);
+      countBody.append(row);
+    });
+    countPage.querySelector('[data-summary-note]').textContent = missing ? `${missing} of ${points.length} time points had no matching sampled label frame.` : `${points.length} time points matched sampled label frames. This page belongs only to ${clip.name}.`;
+    root.append(countPage);
+  });
 }
 
 function interpolateColor(left, right, amount) {
@@ -4022,7 +4227,7 @@ function rasterizeReportHeatmap(clip, columns = 48, rows = 36) {
 function renderReportHeatmaps() {
   const root = $('#report-heatmap-pages');
   root.replaceChildren();
-  reportClips().forEach((clip) => {
+  reportPreviewClips().forEach((clip) => {
     const heatmap = rasterizeReportHeatmap(clip);
     const section = document.createElement('section');
     section.className = 'report-sheet report-appendix-c';
@@ -4101,7 +4306,7 @@ function renderReportCaptures() {
   const root = $('#report-capture-pages');
   root.replaceChildren();
   const prepared = new Map(state.report.captures.map((entry) => [reportCaptureKey({ id: entry.clipId }, entry.time), entry]));
-  const entries = reportClips().flatMap((clip) => clipTimepoints(clip, 120).map((time) => {
+  const entries = reportPreviewClips().flatMap((clip) => clipTimepoints(clip, 120).map((time) => {
     const media = prepared.get(reportCaptureKey(clip, time)) || {};
     return { clip, time, timelineTime: clip.start_sec + time, src: media.src || reportBaseImage(clip), videoCaptured: Boolean(media.videoCaptured), frame: nearestFrameInClip(clip, time, reportSampleTolerance()) };
   }));
@@ -4151,6 +4356,7 @@ function renderReport() {
   renderReportMetrics();
   renderReportCompliance();
   renderReportCountLog();
+  renderReportSummaryPages();
   renderReportHeatmaps();
   renderReportCaptures();
   renderReportIdentity();
@@ -4246,9 +4452,11 @@ async function prepareReportMedia({ silent = false } = {}) {
   const button = $('[data-action="prepare-report"]');
   state.report.preparePromise = (async () => {
     state.report.preparing = true;
-    button.disabled = true;
-    button.setAttribute('aria-busy', 'true');
-    button.lastElementChild.textContent = 'Preparing...';
+    if (button) {
+      button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
+      if (button.lastElementChild) button.lastElementChild.textContent = 'Preparing...';
+    }
     let sourceVideo = null;
     if (state.videoUrl) {
       try {
@@ -4267,7 +4475,7 @@ async function prepareReportMedia({ silent = false } = {}) {
     const fallback = state.sourceJsonName === 'demo-labels.json' ? './public/demo-frame.jpg' : '';
     const captures = [];
     const baseImages = {};
-    for (const clip of reportClips()) {
+    for (const clip of reportPreviewClips()) {
       for (const time of clipTimepoints(clip, 120)) {
         const timelineTime = clip.start_sec + time;
         let src = fallback;
@@ -4294,16 +4502,40 @@ async function prepareReportMedia({ silent = false } = {}) {
   } finally {
     state.report.preparePromise = null;
     state.report.preparing = false;
-    button.disabled = false;
-    button.removeAttribute('aria-busy');
-    button.lastElementChild.textContent = 'Refresh preview';
+    if (button) {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+      if (button.lastElementChild) button.lastElementChild.textContent = 'Refresh preview';
+    }
   }
 }
 
 async function printReport() {
+  state.report.batchPrint = false;
+  renderReport();
   await prepareReportMedia({ silent: true });
   await document.fonts?.ready;
   await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  window.print();
+}
+
+async function printReportBatch() {
+  const selected = reportBatchSelectedClips();
+  if (!selected.length) {
+    showToast('Select at least one clip for batch output', 'error');
+    return;
+  }
+  state.report.batchPrint = true;
+  renderReport();
+  await prepareReportMedia({ silent: true });
+  await document.fonts?.ready;
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  const restore = () => {
+    state.report.batchPrint = false;
+    renderReport();
+    scheduleRecoveryCursor();
+  };
+  window.addEventListener('afterprint', restore, { once: true });
   window.print();
 }
 
@@ -4671,6 +4903,8 @@ function bindEvents() {
     else if (action === 'delete-selected') deleteSelectedRows();
     else if (action === 'prepare-report') void prepareReportMedia();
     else if (action === 'print-report') void printReport();
+    else if (action === 'print-report-batch') void printReportBatch();
+    else if (action === 'select-all-report-clips') selectAllReportClips();
     else if (action === 'focus-report-clip') reportFocusSection();
     else if (action === 'show-shortcuts') openShortcuts();
     else if (action === 'close-shortcuts') closeShortcuts();
@@ -4831,9 +5065,9 @@ function bindEvents() {
   $('#frame-stage').addEventListener('drop', (event) => { event.preventDefault(); if (event.dataTransfer?.files?.length) handleFiles(event.dataTransfer.files); });
   $('#table-status-filter').addEventListener('change', (event) => { state.tableFilter = event.target.value; state.tableSelection.clear(); renderTable(); }); $('#table-search').addEventListener('input', (event) => { state.tableQuery = event.target.value; renderTable(); }); $('#table-select-all').addEventListener('change', (event) => { const checked = event.target.checked; const visible = flattenLabels().slice(0, 1000); visible.forEach((row) => checked ? state.tableSelection.add(row.key) : state.tableSelection.delete(row.key)); $$('#label-table-body tr').forEach((row) => row.classList.toggle('is-selected', checked)); $$('#label-table-body input[type="checkbox"]').forEach((checkbox) => { checkbox.checked = checked; }); $('#delete-selected-button').disabled = state.tableSelection.size === 0; });
   const reportFields = { '#report-tenderer': 'tenderer', '#report-date': 'demonstrationDate', '#report-tp': 'tp', '#report-fp': 'fp', '#report-up': 'up', '#report-iou': 'iou' };
-  Object.entries(reportFields).forEach(([selector, key]) => $(selector).addEventListener('input', (event) => { state.report[key] = event.target.value; markDirty(); renderReportIdentity(); renderReportMetrics(); }));
+  Object.entries(reportFields).forEach(([selector, key]) => $(selector).addEventListener('input', (event) => { state.report[key] = event.target.value; markDirty(); renderReportIdentity(); renderReportMetrics(); renderReportSummaryPages(); }));
   $('#report-clip-cuts').addEventListener('change', (event) => { if (applyReportClipCuts(event.target.value)) renderReport(); });
-  $('#report-compliance-controls').addEventListener('change', (event) => { const id = event.target.dataset.compliance; if (!id) return; state.report.compliance[id] = event.target.checked; markDirty(); renderReportCompliance(); });
+  $('#report-compliance-controls').addEventListener('change', (event) => { const id = event.target.dataset.compliance; if (!id) return; state.report.compliance[id] = event.target.checked; markDirty(); renderReportCompliance(); renderReportSummaryPages(); });
   $('#clip-dialog').addEventListener('click', (event) => { if (event.target.id === 'clip-dialog') closeClipDialog(); });
   $('#shortcut-dialog').addEventListener('click', (event) => { if (event.target.id === 'shortcut-dialog') closeShortcuts(); });
   document.addEventListener('keydown', handleKeydown);

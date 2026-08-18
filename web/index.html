@@ -310,108 +310,104 @@
         <section id="report-view" class="view-panel alternate-view" data-view-panel="report" hidden>
           <div class="view-heading compact-heading task-heading report-task-heading">
             <div><div class="section-kicker">TENDER OUTPUT</div><h1>FEHQ 1019/26 report</h1></div>
-            <div class="heading-actions">
-              <button class="button" type="button" data-action="prepare-report"><span class="icon" data-icon="refresh"></span><span>Refresh preview</span></button>
-              <button class="button button-primary" type="button" data-action="print-report"><span class="icon" data-icon="printer"></span><span>Print / Save PDF</span></button>
-            </div>
           </div>
 
-          <section class="report-controls" aria-label="Report details">
-            <div class="report-control-row">
-              <label class="report-field report-field-wide"><span>Name of Tenderer</span><input id="report-tenderer" type="text" autocomplete="organization" placeholder="Enter tenderer name" /></label>
-              <label class="report-field"><span>Date of Demonstration</span><input id="report-date" type="date" /></label>
-            </div>
-            <div class="report-control-row report-clip-controls">
-              <label class="report-field report-field-wide"><span>Clip start times after Clip 1</span><input id="report-clip-cuts" type="text" inputmode="text" placeholder="00:12:30, 00:28:00" /></label>
-              <div class="report-clip-summary" id="report-clip-summary" aria-live="polite">1 clip</div>
-            </div>
-            <div class="report-control-row report-metric-inputs">
-              <label class="report-field"><span>True Positives (TP)</span><input id="report-tp" type="number" min="0" step="1" inputmode="numeric" placeholder="-" /></label>
-              <label class="report-field"><span>False Positives (FP)</span><input id="report-fp" type="number" min="0" step="1" inputmode="numeric" placeholder="-" /></label>
-              <label class="report-field"><span>Undetected Positives (UP)</span><input id="report-up" type="number" min="0" step="1" inputmode="numeric" placeholder="-" /></label>
-              <label class="report-field"><span>Mean IoU</span><input id="report-iou" type="number" min="0" max="1" step="0.01" inputmode="decimal" placeholder="-" /></label>
-            </div>
-            <details class="report-declaration-controls">
-              <summary><span>Camera and system declarations</span><strong id="report-compliance-count">0 / 13 confirmed</strong></summary>
-              <div id="report-compliance-controls" class="report-compliance-controls"></div>
-            </details>
-          </section>
+          <div class="report-layout">
+            <aside class="report-side-panel" aria-label="Report information and clip selection">
+              <section class="report-controls" aria-label="Report details">
+                <div class="report-control-row">
+                  <label class="report-field report-field-wide"><span>Name of Tenderer</span><input id="report-tenderer" type="text" autocomplete="organization" placeholder="Enter tenderer name" /></label>
+                  <label class="report-field"><span>Date of Demonstration</span><input id="report-date" type="date" /></label>
+                </div>
+                <div class="report-control-row report-clip-controls">
+                  <label class="report-field report-field-wide"><span>Clip start times after Clip 1</span><input id="report-clip-cuts" type="text" inputmode="text" placeholder="00:12:30, 00:28:00" /></label>
+                  <div class="report-clip-summary" id="report-clip-summary" aria-live="polite">1 clip</div>
+                </div>
+                <div class="report-control-row report-metric-inputs">
+                  <label class="report-field"><span>True Positives (TP)</span><input id="report-tp" type="number" min="0" step="1" inputmode="numeric" placeholder="-" /></label>
+                  <label class="report-field"><span>False Positives (FP)</span><input id="report-fp" type="number" min="0" step="1" inputmode="numeric" placeholder="-" /></label>
+                  <label class="report-field"><span>Undetected Positives (UP)</span><input id="report-up" type="number" min="0" step="1" inputmode="numeric" placeholder="-" /></label>
+                  <label class="report-field"><span>Mean IoU</span><input id="report-iou" type="number" min="0" max="1" step="0.01" inputmode="decimal" placeholder="-" /></label>
+                </div>
+                <details class="report-results-details" open>
+                  <summary><span>Calculated results</span><strong>Preview</strong></summary>
+                  <div class="report-meta-grid report-meta-compact report-source-meta">
+                    <span>Source label file</span><strong id="report-source-value">-</strong>
+                    <span>Loaded coverage</span><strong id="report-coverage-value">-</strong>
+                  </div>
+                  <table class="report-table report-metric-table report-side-metric-table">
+                    <thead><tr><th>Indicator</th><th>Result</th><th>Status</th></tr></thead>
+                    <tbody>
+                      <tr><td>Precision</td><td id="report-precision-value">Not entered</td><td><span id="report-precision-status" class="report-status pending">NOT ASSESSED</span></td></tr>
+                      <tr><td>Recall</td><td id="report-recall-value">Not entered</td><td><span id="report-recall-status" class="report-status pending">NOT ASSESSED</span></td></tr>
+                      <tr><td>Mean IoU</td><td id="report-iou-value">Not entered</td><td><span id="report-iou-status" class="report-status pending">NOT ASSESSED</span></td></tr>
+                    </tbody>
+                  </table>
+                </details>
+                <details class="report-declaration-controls">
+                  <summary><span>Camera and system declarations</span><strong id="report-compliance-count">0 / 13 confirmed</strong></summary>
+                  <div id="report-compliance-controls" class="report-compliance-controls"></div>
+                  <table class="report-table report-compliance-table report-side-compliance-table" aria-label="Declaration status">
+                    <thead><tr><th>Item</th><th>Mandatory feature</th><th>Declaration</th></tr></thead>
+                    <tbody id="report-compliance-table"></tbody>
+                  </table>
+                </details>
+                <details class="report-count-details">
+                  <summary><span>Clip count log</span><strong>2-minute points</strong></summary>
+                  <table class="report-table report-count-table"><thead><tr><th>Clip</th><th>Time</th><th>Count</th></tr></thead><tbody id="report-count-log"></tbody></table>
+                  <p id="report-count-note" class="report-note"></p>
+                </details>
+              </section>
 
-          <section class="report-clip-workspace" aria-label="Report clips and timelines">
-            <aside class="report-clip-sidebar" aria-label="Report video clips">
-              <div class="clip-sidebar-header">
-                <div><span class="section-kicker">SOURCE</span><h2>Clips</h2></div>
-                <span id="report-clip-count" class="clip-count">0</span>
-              </div>
-              <div id="report-clip-list" class="report-clip-list"></div>
+              <section class="report-clip-workspace" aria-label="Report clips and timelines">
+                <aside class="report-clip-sidebar" aria-label="Report video clips">
+                  <div class="clip-sidebar-header">
+                    <div><span class="section-kicker">SOURCE</span><h2>Clips</h2></div>
+                    <span id="report-clip-count" class="clip-count">0</span>
+                  </div>
+                  <div class="report-clip-batch-toolbar">
+                    <span id="report-selected-clip-count" class="muted-copy">1 selected</span>
+                    <button class="icon-button compact" type="button" data-action="select-all-report-clips" aria-label="Select all report clips" data-tooltip="Select all"><span class="icon" data-icon="check-square"></span></button>
+                  </div>
+                  <div id="report-clip-list" class="report-clip-list"></div>
+                </aside>
+                <section class="report-clip-inspector" aria-label="Selected report clip timeline">
+                  <div class="report-clip-inspector-heading">
+                    <div><span class="section-kicker">CLIP REPORT</span><h2 id="report-active-clip-title">Clip 1 report</h2></div>
+                    <button class="button" type="button" data-action="focus-report-clip"><span class="icon" data-icon="eye"></span><span>View report</span></button>
+                  </div>
+                  <div class="report-timebar-stack" aria-label="Report frame navigation timelines">
+                    <div class="video-timebar clip-timebar" aria-label="Selected report clip timeline">
+                      <span id="report-clip-time-label" class="video-timebar-label">Clip</span>
+                      <div class="video-timebar-track"><input id="report-clip-time-slider" class="video-time-slider" type="range" min="0" max="1" value="0" step="0.2" aria-label="Time within selected report clip" /></div>
+                      <span class="video-timebar-value"><span id="report-clip-time-current">00:00:00.0</span><span class="video-time-separator"> / </span><span id="report-clip-time-end">00:00:00.0</span></span>
+                    </div>
+                    <div class="video-timebar global-timebar" aria-label="Full report video timeline">
+                      <span class="video-timebar-label">Video</span>
+                      <div class="video-timebar-track"><input id="report-video-time-slider" class="video-time-slider" type="range" min="0" max="1" value="0" step="0.2" aria-label="Time in full report video" /></div>
+                      <span class="video-timebar-value"><span id="report-video-time-current">00:00:00</span><span class="video-time-separator"> / </span><span id="report-video-time-end">00:00:00</span></span>
+                    </div>
+                  </div>
+                  <p id="report-clip-time-note" class="report-clip-time-note">Click a clip thumbnail or timeline to inspect its source frame.</p>
+                </section>
+              </section>
             </aside>
-            <section class="report-clip-inspector" aria-label="Selected report clip timeline">
-              <div class="report-clip-inspector-heading">
-                <div><span class="section-kicker">CLIP REPORT</span><h2 id="report-active-clip-title">Clip 1 report</h2></div>
-                <button class="button" type="button" data-action="focus-report-clip"><span class="icon" data-icon="eye"></span><span>View report</span></button>
-              </div>
-              <div class="report-timebar-stack" aria-label="Report frame navigation timelines">
-                <div class="video-timebar clip-timebar" aria-label="Selected report clip timeline">
-                  <span id="report-clip-time-label" class="video-timebar-label">Clip</span>
-                  <div class="video-timebar-track"><input id="report-clip-time-slider" class="video-time-slider" type="range" min="0" max="1" value="0" step="0.2" aria-label="Time within selected report clip" /></div>
-                  <span class="video-timebar-value"><span id="report-clip-time-current">00:00:00.0</span><span class="video-time-separator"> / </span><span id="report-clip-time-end">00:00:00.0</span></span>
-                </div>
-                <div class="video-timebar global-timebar" aria-label="Full report video timeline">
-                  <span class="video-timebar-label">Video</span>
-                  <div class="video-timebar-track"><input id="report-video-time-slider" class="video-time-slider" type="range" min="0" max="1" value="0" step="0.2" aria-label="Time in full report video" /></div>
-                  <span class="video-timebar-value"><span id="report-video-time-current">00:00:00</span><span class="video-time-separator"> / </span><span id="report-video-time-end">00:00:00</span></span>
+
+            <section class="report-preview-column" aria-label="A4 report preview">
+              <div class="report-preview-toolbar">
+                <div><span class="section-kicker">A4 PREVIEW</span><strong id="report-preview-title">Clip 1 report</strong><span id="report-preview-note" class="muted-copy">One clip per report</span></div>
+                <div class="heading-actions">
+                  <button class="button" type="button" data-action="prepare-report"><span class="icon" data-icon="refresh"></span><span>Refresh preview</span></button>
+                  <button class="button" type="button" data-action="print-report"><span class="icon" data-icon="printer"></span><span>Print current PDF</span></button>
+                  <button class="button button-primary" type="button" data-action="print-report-batch"><span class="icon" data-icon="layers"></span><span>Batch print selected</span></button>
                 </div>
               </div>
-              <p id="report-clip-time-note" class="report-clip-time-note">Click a clip thumbnail or timeline to inspect its source frame.</p>
-            </section>
-          </section>
-
-          <div id="report-document" class="report-document">
-            <section class="report-sheet report-annex-a">
-              <div class="report-running-head"><strong>Annex VII</strong><span>Appendix A</span></div>
-              <h2>Mandatory Features of Thermal Imaging Camera System and Data Analysis by Artificial Intelligence Model for Rodent Detection</h2>
-              <div class="report-reference">Tender Ref.: FEHQ 1019/26</div>
-              <div class="report-meta-grid">
-                <span>Name of Tenderer</span><strong data-report-tenderer>Not entered</strong>
-                <span>Date of Demonstration</span><strong data-report-date>Not entered</strong>
-                <span>Source label file</span><strong id="report-source-value">-</strong>
-                <span>Loaded time coverage</span><strong id="report-coverage-value">-</strong>
+              <div id="report-document" class="report-document">
+                <div id="report-summary-pages"></div>
+                <div id="report-heatmap-pages"></div>
+                <div id="report-capture-pages"></div>
               </div>
-              <h3>AI model performance</h3>
-              <table class="report-table report-metric-table">
-                <thead><tr><th>Performance indicator</th><th>Calculation</th><th>Minimum requirement</th><th>Result</th><th>Status</th></tr></thead>
-                <tbody>
-                  <tr><td>Precision</td><td>TP / (TP + FP)</td><td>&gt; 0.8</td><td id="report-precision-value">Not entered</td><td><span id="report-precision-status" class="report-status pending">NOT ASSESSED</span></td></tr>
-                  <tr><td>Recall</td><td>TP / (TP + UP)</td><td>&gt; 0.8</td><td id="report-recall-value">Not entered</td><td><span id="report-recall-status" class="report-status pending">NOT ASSESSED</span></td></tr>
-                  <tr><td>Intersection over Union (IoU)</td><td>Mean validated IoU</td><td>&gt; 0.2</td><td id="report-iou-value">Not entered</td><td><span id="report-iou-status" class="report-status pending">NOT ASSESSED</span></td></tr>
-                </tbody>
-              </table>
-              <h3>Camera and system declarations</h3>
-              <table class="report-table report-compliance-table">
-                <thead><tr><th>Item</th><th>Mandatory feature</th><th>Declaration</th></tr></thead>
-                <tbody id="report-compliance-table"></tbody>
-              </table>
-              <p class="report-note">A prediction is counted as a true positive only when its IoU is greater than 0.2. All results require validation against ground-truth annotations.</p>
             </section>
-
-            <section class="report-sheet report-appendix-b">
-              <div class="report-running-head"><strong>Counting Log</strong><span>Appendix B</span></div>
-              <h2>Tender for Provision of Services on Assessing Rodent Activity for Rodent Activity Survey and Anti-Rodent Operation in the Territory</h2>
-              <div class="report-reference">Tender Ref.: FEHQ 1019/26</div>
-              <div class="report-meta-grid report-meta-compact">
-                <span>Name of Tenderer</span><strong data-report-tenderer>Not entered</strong>
-                <span>Date of Demonstration</span><strong data-report-date>Not entered</strong>
-              </div>
-              <h3>Rodent count at 2-minute time points</h3>
-              <table class="report-table report-count-table">
-                <thead><tr><th>Clip</th><th>Time point of the thermal video (hh:mm:ss)</th><th>Rodent count at the time point</th></tr></thead>
-                <tbody id="report-count-log"></tbody>
-              </table>
-              <p id="report-count-note" class="report-note"></p>
-            </section>
-
-            <div id="report-heatmap-pages"></div>
-            <div id="report-capture-pages"></div>
           </div>
         </section>
 
