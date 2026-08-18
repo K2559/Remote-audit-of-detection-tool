@@ -122,6 +122,8 @@ assert.match(html, /id="report-heatmap-pages"/);
 assert.match(html, /id="report-clip-list"/);
 assert.match(html, /id="report-clip-time-slider"/);
 assert.match(html, /id="report-video-time-slider"/);
+assert.doesNotMatch(source, /report-summary-sheet/, 'The standalone clip summary page must stay removed');
+assert.match(source, /report-count-sheet/, 'Per-clip count reports must remain available');
 assert.match(html, /data-action="open-json"[^>]*id="json-import-button"/);
 assert.match(html, /data-action="open-video"[^>]*id="video-import-button"/);
 assert.match(html, /id="json-input"[^>]*accept="\.json,application\/json"/);

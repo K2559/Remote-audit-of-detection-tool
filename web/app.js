@@ -4054,80 +4054,9 @@ function renderReportSummaryPages() {
   if (!root) return;
   root.replaceChildren();
   const clips = reportPreviewClips();
-  const metrics = calculateReportMetrics();
   const sourceName = state.sourceJsonName || state.videoFile?.name || 'Not entered';
 
   clips.forEach((clip) => {
-    const frames = reportClipFrames(clip);
-    const detections = frames.reduce((sum, frame) => sum + (frame.detections?.length || 0), 0);
-    const overview = document.createElement('section');
-    overview.className = 'report-sheet report-summary-sheet';
-    overview.dataset.clipId = clip.id;
-    overview.innerHTML = `
-      <div class="report-running-head"><strong>Thermal audit report</strong><span data-summary-clip></span></div>
-      <h2>FEHQ 1019/26 rodent detection report</h2>
-      <div class="report-reference">Tender output for one video clip</div>
-      <div class="report-meta-grid">
-        <span>Name of Tenderer</span><strong data-summary-tenderer></strong>
-        <span>Date of Demonstration</span><strong data-summary-date></strong>
-        <span>Source label file</span><strong data-summary-source></strong>
-        <span>Clip coverage</span><strong data-summary-range></strong>
-        <span>Sampled frames</span><strong data-summary-frames></strong>
-        <span>Detection boxes</span><strong data-summary-detections></strong>
-      </div>
-      <h3>Calculated detection results</h3>
-      <table class="report-table report-metric-table"><thead><tr><th>Indicator</th><th>Result</th><th>Status</th></tr></thead><tbody></tbody></table>
-      <h3>Camera and system declarations</h3>
-      <table class="report-table report-compliance-table"><thead><tr><th>Item</th><th>Mandatory feature</th><th>Declaration</th></tr></thead><tbody></tbody></table>
-      <p class="report-note" data-summary-note></p>`;
-    overview.querySelector('[data-summary-clip]').textContent = `${clip.name} / ${formatClipClock(clip.start_sec)}-${formatClipClock(clip.end_sec)}`;
-    overview.querySelector('[data-summary-tenderer]').textContent = state.report.tenderer.trim() || 'Not entered';
-    overview.querySelector('[data-summary-date]').textContent = formatReportDate(state.report.demonstrationDate);
-    overview.querySelector('[data-summary-source]').textContent = sourceName;
-    overview.querySelector('[data-summary-range]').textContent = `${formatClipClock(clip.start_sec)} to ${formatClipClock(clip.end_sec)} (${formatTime(Math.max(0, clip.end_sec - clip.start_sec))})`;
-    overview.querySelector('[data-summary-frames]').textContent = frames.length.toLocaleString();
-    overview.querySelector('[data-summary-detections]').textContent = detections.toLocaleString();
-
-    const metricBody = overview.querySelector('.report-metric-table tbody');
-    [
-      ['Precision', metrics.precision, 0.8],
-      ['Recall', metrics.recall, 0.8],
-      ['Mean IoU', metrics.iou, 0.2],
-    ].forEach(([label, value, threshold]) => {
-      const row = document.createElement('tr');
-      const labelCell = document.createElement('td');
-      labelCell.textContent = label;
-      const valueCell = document.createElement('td');
-      valueCell.textContent = reportMetricDisplay(value);
-      const statusCell = document.createElement('td');
-      const status = document.createElement('span');
-      const [text, className] = reportMetricState(value, threshold);
-      status.className = `report-status ${className}`;
-      status.textContent = text;
-      statusCell.append(status);
-      row.append(labelCell, valueCell, statusCell);
-      metricBody.append(row);
-    });
-
-    const complianceBody = overview.querySelector('.report-compliance-table tbody');
-    REPORT_REQUIREMENTS.forEach((item) => {
-      const checked = Boolean(state.report.compliance[item.id]);
-      const row = document.createElement('tr');
-      const code = document.createElement('td');
-      code.textContent = item.code;
-      const requirement = document.createElement('td');
-      requirement.textContent = item.requirement;
-      const statusCell = document.createElement('td');
-      const status = document.createElement('span');
-      status.className = `report-status ${checked ? 'pass' : 'pending'}`;
-      status.textContent = checked ? 'DECLARED COMPLIANT' : 'NOT ASSESSED';
-      statusCell.append(status);
-      row.append(code, requirement, statusCell);
-      complianceBody.append(row);
-    });
-    overview.querySelector('[data-summary-note]').textContent = `${clip.name} is reported independently. It contains ${frames.length.toLocaleString()} sampled frame${frames.length === 1 ? '' : 's'} and ${detections.toLocaleString()} labelled detection ${detections === 1 ? 'box' : 'boxes'}.`;
-    root.append(overview);
-
     const countPage = document.createElement('section');
     countPage.className = 'report-sheet report-count-sheet';
     countPage.dataset.clipId = clip.id;
