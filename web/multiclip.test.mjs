@@ -14,9 +14,10 @@ const context = vm.createContext({
   requestAnimationFrame: (callback) => setTimeout(callback, 0),
 });
 
-vm.runInContext(`${source}\n;globalThis.auditTest = { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches };`, context);
+vm.runInContext(`${source}\n;globalThis.auditTest = { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, reviewSampleStep, sampleReviewFrames, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches };`, context);
 
-const { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches } = context.auditTest;
+const { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, reviewSampleStep, sampleReviewFrames, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches } = context.auditTest;
+assert.equal(reviewSampleStep(), 10);
 const frames = [0, 10, 20, 30, 40, 50].map((timestamp, index) => ({
   sample_index: index,
   source_frame_index: index * 250,
@@ -158,11 +159,74 @@ assert.doesNotMatch(css, /report-heat-spot/);
 
 const videoOnlyDocument = createVideoOnlyDocument({ name: 'inspection.mp4' }, 75.5, 640, 480);
 assert.equal(videoOnlyDocument.source_video, 'inspection.mp4');
-assert.equal(videoOnlyDocument.frames.length, 378);
-assert.equal(videoOnlyDocument.frames[1].timestamp_sec, 0.2);
-assert.equal(videoOnlyDocument.frames.at(-1).timestamp_sec, 75.4);
-assert.equal(videoOnlyDocument.video.sampled_frame_count, 378);
+assert.equal(videoOnlyDocument.frames.length, 8);
+assert.equal(videoOnlyDocument.frames[1].timestamp_sec, 10);
+assert.equal(videoOnlyDocument.frames.at(-1).timestamp_sec, 70);
+assert.equal(videoOnlyDocument.frames[1].source_frame_index, 250);
+assert.equal(videoOnlyDocument.sampling.sample_fps, 0.1);
+assert.equal(videoOnlyDocument.sampling.source_frame_stride, 250);
+assert.equal(videoOnlyDocument.video.sampled_frame_count, 8);
 assert.deepEqual(Array.from(videoOnlyDocument.clips, (clip) => [clip.start_sec, clip.end_sec, clip.source]), [[0, 75.5, 'video']], 'Video-only import must create one full-duration clip');
+
+const inferenceOutputDocument = normalizeDocument({
+  schema: 'rodent-vision-inference/1.0',
+  input: {
+    video: 'C:\\source\\Clip for Demonstration for Tender Ref. FEHQ 1020_25.mp4',
+    width: 1280,
+    height: 960,
+    fps: 25,
+    frames: 750,
+    durationSeconds: 30,
+    sourceFramesRead: 3,
+  },
+  settings: { sampleFps: 0.1, renderPlaybackFps: 0.1 },
+  outputs: {
+    renderedVideo: 'C:\\output\\Clip_for_Demonstration_for_Tender_Ref._FEHQ_1020_25_pilot21-screened-control.mp4',
+    renderedVideoInfo: {
+      path: 'C:\\output\\Clip_for_Demonstration_for_Tender_Ref._FEHQ_1020_25_pilot21-screened-control.mp4',
+      width: 1280,
+      height: 960,
+      fps: 0.1,
+      frames: 3,
+      durationSeconds: 30,
+    },
+  },
+  frames: [
+    { sampleIndex: 0, sourceFrameIndex: 125, timestampSeconds: 5, outputTimestampSeconds: 0, detections: [] },
+    { sampleIndex: 1, sourceFrameIndex: 375, timestampSeconds: 15, outputTimestampSeconds: 10, detections: [] },
+    {
+      sampleIndex: 2,
+      sourceFrameIndex: 625,
+      timestampSeconds: 25,
+      outputTimestampSeconds: 20,
+      detections: [{ classId: 1, className: 'rodent', score: 0.73, bboxXyxyPixels: [724, 370, 760, 412] }],
+    },
+  ],
+});
+assert.equal(inferenceOutputDocument.frames.length, 3, 'The producer schema must preserve all 0.1 FPS samples');
+assert.deepEqual(
+  Array.from(inferenceOutputDocument.frames, (frame) => [frame.timestamp_sec, frame.source_timestamp_sec]),
+  [[0, 5], [10, 15], [20, 25]],
+  'Rendered timestamps must remain separate from source timestamps',
+);
+assert.equal(inferenceOutputDocument.sampling.sample_fps, 0.1);
+assert.equal(inferenceOutputDocument.sampling.source_frame_stride, 250);
+assert.equal(inferenceOutputDocument.video.source_duration_sec, 30);
+assert.equal(inferenceOutputDocument.video.rendered_sampled_video, true);
+assert.equal(inferenceOutputDocument.frames[2].detections[0].label, 'rodent');
+assert.deepEqual(Array.from(inferenceOutputDocument.frames[2].detections[0].bbox_xyxy_pixels), [724, 370, 760, 412]);
+state.doc = inferenceOutputDocument;
+state.sourceJsonName = 'Clip_for_Demonstration_for_Tender_Ref._FEHQ_1020_25_pilot21-screened-control_t0p3711.json';
+assert.equal(
+  videoMatchesDocument({ name: 'Clip_for_Demonstration_for_Tender_Ref._FEHQ_1020_25_pilot21-screened-control_t0p3711.mp4' }),
+  true,
+  'A generated rendered MP4 must match the source JSON by normalized stem',
+);
+assert.equal(
+  videoMatchesDocument({ name: 'Clip_for_Demonstration_for_Tender_Ref._FEHQ_1020_25_pilot21-screened-control_t0p3711_20260818_150107.mp4' }),
+  true,
+  'Timestamped rendered MP4 exports must match the producer JSON',
+);
 
 const sparseDocument = normalizeDocument({
   source_video: 'sparse.mp4',
@@ -173,14 +237,14 @@ const sparseDocument = normalizeDocument({
     { sample_index: 1, source_frame_index: 5, timestamp_sec: 0.2, detections: [] },
   ],
 });
-assert.equal(sparseDocument.frames.length, 2);
+assert.equal(sparseDocument.frames.length, 1);
 assert.ok(sparseDocument.clips[0].end_sec < 1, 'Sparse labels initially cover less than one second');
 assert.equal(reconcileDocumentVideo(sparseDocument, 75.5, 640, 480), true);
 assert.equal(sparseDocument.video.source_duration_sec, 75.5);
 assert.equal(sparseDocument.video.width, 640);
 assert.equal(sparseDocument.video.height, 480);
 assert.equal(sparseDocument.video.source_frame_count, 1888);
-assert.equal(sparseDocument.video.sampled_frame_count, 2, 'MP4 metadata must not invent label samples');
+assert.equal(sparseDocument.video.sampled_frame_count, 1, 'MP4 metadata must not invent label samples');
 assert.equal(sparseDocument.clips[0].end_sec, 75.5, 'The clip range must follow the attached MP4 duration');
 assert.deepEqual(Array.from(sparseDocument.clips, (clip) => [clip.start_sec, clip.end_sec, clip.source]), [[0, 75.5, 'video']], 'A label-only JSON must become one full-video clip');
 
@@ -399,9 +463,11 @@ assert.equal(await cancelledResult, false, 'Superseded seeks must stop immediate
 const realLabelPath = new URL('../sample/Clip for Demonstration for Tender Ref. FEHQ 1020_25_label.json', import.meta.url);
 const realDocument = normalizeDocument(JSON.parse(fs.readFileSync(realLabelPath, 'utf8')));
 const firstDetectedFrame = realDocument.frames.find((frame) => frame.detections.length);
-assert.equal(realDocument.frames.length, 26100);
-assert.equal(firstDetectedFrame.sample_index, 441);
-assert.equal(firstDetectedFrame.timeline_sec, 88.2);
+assert.equal(realDocument.frames.length, 522);
+assert.equal(realDocument.frames[1].timestamp_sec, 10);
+assert.equal(realDocument.sampling.sample_fps, 0.1);
+assert.equal(realDocument.video.input_sampled_frame_count, 26100);
+assert.ok(firstDetectedFrame, 'The ten-second review set should retain detected samples');
 state.doc = realDocument;
 assert.equal(fileNameOnly('C:\\video\\CLIP FOR DEMONSTRATION FOR TENDER REF. FEHQ 1020_25.MP4'), 'clip for demonstration for tender ref. fehq 1020_25.mp4');
 assert.equal(videoMatchesDocument({ name: 'Clip for Demonstration for Tender Ref. FEHQ 1020_25.mp4' }), true);

@@ -54,6 +54,13 @@ const RECOVERY_SCHEMA_VERSION = 1;
 const RECOVERY_DEBOUNCE_MS = 1000;
 const RECOVERY_MAX_WAIT_MS = 5000;
 
+// Tender review samples are intentionally sparse. The source video keeps its
+// native frame rate, but labels, heatmaps, and reports only need one sample
+// every ten seconds.
+const REVIEW_SAMPLE_INTERVAL_SEC = 10;
+const REVIEW_SAMPLE_FPS = 1 / REVIEW_SAMPLE_INTERVAL_SEC;
+const REVIEW_PLAYBACK_FPS = 5;
+
 let recoveryDatabasePromise = null;
 
 function todayIsoDate() {
@@ -478,11 +485,11 @@ function createDemoDocument() {
 
 function createVideoOnlyDocument(file, duration, width, height) {
   const sourceFps = 25;
-  const sampleFps = 5;
+  const sampleFps = REVIEW_SAMPLE_FPS;
   const mediaDuration = Math.max(0, Number(duration) || 0);
   const sampleCount = Math.max(1, Math.ceil(mediaDuration * sampleFps));
   const frames = Array.from({ length: sampleCount }, (_value, index) => {
-    const timestamp = Math.min(Math.max(0, mediaDuration - 0.001), index / sampleFps);
+    const timestamp = Math.min(Math.max(0, mediaDuration - 0.001), index * REVIEW_SAMPLE_INTERVAL_SEC);
     return {
       sample_index: index,
       source_frame_index: Math.round(timestamp * sourceFps),
@@ -527,6 +534,65 @@ function finiteNumber(...values) {
   return null;
 }
 
+function isInferenceOutputDocument(raw) {
+  if (!raw || typeof raw !== 'object') return false;
+  if (String(raw.schema || '').toLowerCase() === 'rodent-vision-inference/1.0') return true;
+  return Boolean(raw.input && Array.isArray(raw.frames) && raw.frames.some((frame) => frame && (
+    frame.sampleIndex != null || frame.timestampSeconds != null || frame.outputTimestampSeconds != null
+  )));
+}
+
+function adaptInferenceOutputDocument(raw) {
+  if (!isInferenceOutputDocument(raw)) return raw;
+  const input = raw.input && typeof raw.input === 'object' ? raw.input : {};
+  const settings = raw.settings && typeof raw.settings === 'object' ? raw.settings : {};
+  const outputs = raw.outputs && typeof raw.outputs === 'object' ? raw.outputs : {};
+  const renderedInfo = outputs.renderedVideoInfo && typeof outputs.renderedVideoInfo === 'object'
+    ? outputs.renderedVideoInfo
+    : {};
+  const sourceFps = finiteNumber(raw.sampling?.source_fps, raw.sampling?.sourceFps, input.fps, 25) || 25;
+  const sampleFps = finiteNumber(raw.sampling?.sample_fps, raw.sampling?.sampleFps, settings.sampleFps, settings.requestedSampleFps, 0.1) || 0.1;
+  const sourceDuration = finiteNumber(
+    raw.video?.source_duration_sec,
+    raw.video?.sourceDurationSec,
+    input.durationSeconds,
+    renderedInfo.durationSeconds,
+  ) || 0;
+  const sourceFrameCount = finiteNumber(raw.video?.source_frame_count, raw.video?.sourceFrameCount, input.frames);
+  const sampledFrameCount = finiteNumber(
+    raw.video?.input_sampled_frame_count,
+    raw.video?.sampled_frame_count,
+    input.sourceFramesRead,
+    renderedInfo.frames,
+    Array.isArray(raw.frames) ? raw.frames.length : 0,
+  ) || 0;
+  const renderedVideo = outputs.renderedVideo || renderedInfo.path || '';
+  const hasOutputTimestamps = Array.isArray(raw.frames) && raw.frames.some((frame) => frame?.outputTimestampSeconds != null);
+  const renderedSampledVideo = Boolean(renderedVideo && (Number(renderedInfo.fps) > 0 && Number(renderedInfo.fps) <= 0.2 || hasOutputTimestamps));
+  raw.source_video ||= input.video || '';
+  raw.video = {
+    ...(raw.video || {}),
+    width: finiteNumber(raw.video?.width, input.width, renderedInfo.width, 1280) || 1280,
+    height: finiteNumber(raw.video?.height, input.height, renderedInfo.height, 960) || 960,
+    source_duration_sec: sourceDuration,
+    source_frame_count: sourceFrameCount || 0,
+    sampled_frame_count: sampledFrameCount,
+    input_sampled_frame_count: sampledFrameCount,
+    rendered_video: renderedVideo,
+    rendered_sampled_video: renderedSampledVideo,
+  };
+  raw.sampling = {
+    ...(raw.sampling || {}),
+    source_fps: sourceFps,
+    sample_fps: sampleFps,
+    source_frame_stride: finiteNumber(raw.sampling?.source_frame_stride, raw.sampling?.sourceFrameStride, sourceFps / sampleFps) || sourceFps / sampleFps,
+  };
+  if (!Array.isArray(raw.classes) || !raw.classes.length) raw.classes = [{ id: 1, name: 'rodent' }];
+  raw.rendered_video = renderedVideo;
+  raw.rendered_sampled_video = renderedSampledVideo;
+  return raw;
+}
+
 function median(values) {
   const sorted = values.filter((value) => Number.isFinite(value) && value > 0).sort((a, b) => a - b);
   if (!sorted.length) return 0;
@@ -549,9 +615,9 @@ function normalizeExplicitClips(raw, duration) {
   if (!source.length) return [];
   let cursor = 0;
   const clips = source.map((item, index) => {
-    const start = Math.max(0, finiteNumber(item.start_sec, item.source_start_sec, item.timeline_start_sec, item.offset_sec, cursor) || 0);
-    const declaredEnd = finiteNumber(item.end_sec, item.source_end_sec, item.timeline_end_sec);
-    const itemDuration = Math.max(0, finiteNumber(item.duration_sec, item.duration) || 0);
+    const start = Math.max(0, finiteNumber(item.start_sec, item.startSec, item.source_start_sec, item.sourceStartSec, item.timeline_start_sec, item.timelineStartSec, item.offset_sec, item.offsetSec, cursor) || 0);
+    const declaredEnd = finiteNumber(item.end_sec, item.endSec, item.source_end_sec, item.sourceEndSec, item.timeline_end_sec, item.timelineEndSec);
+    const itemDuration = Math.max(0, finiteNumber(item.duration_sec, item.durationSec, item.durationSeconds, item.duration) || 0);
     const end = Math.max(start, declaredEnd ?? (itemDuration ? start + itemDuration : start));
     cursor = end;
     const savedSource = String(item.source || '').toLowerCase();
@@ -597,7 +663,8 @@ function deriveDocumentClips(doc, rawFrames, raw) {
     const delta = Number(rawFrames[index]?.timestamp_sec) - Number(rawFrames[index - 1]?.timestamp_sec);
     if (delta > 0) deltas.push(delta);
   }
-  const expected = median(deltas) || 1 / Math.max(1, Number(doc.sampling.sample_fps || 1));
+  const configuredSampleFps = Number(doc.sampling.sample_fps);
+  const expected = median(deltas) || (Number.isFinite(configuredSampleFps) && configuredSampleFps > 0 ? 1 / configuredSampleFps : 1);
   const frameMaximum = Math.max(...frames.map((frame) => frame.timestamp_sec));
   const duration = Math.max(frameMaximum + expected, Number(doc.video.source_duration_sec || 0));
   let clips = normalizeExplicitClips(raw, duration);
@@ -654,34 +721,133 @@ function deriveDocumentClips(doc, rawFrames, raw) {
   return clips;
 }
 
+function reviewSampleStep() {
+  return REVIEW_SAMPLE_INTERVAL_SEC;
+}
+
+function sampleReviewFrames(frames, clips, intervalSec = REVIEW_SAMPLE_INTERVAL_SEC) {
+  if (!Array.isArray(frames) || !frames.length) return [];
+  const interval = Math.max(0.001, Number(intervalSec) || REVIEW_SAMPLE_INTERVAL_SEC);
+  const ordered = [...frames].sort((a, b) => frameTimeline(a) - frameTimeline(b) || Number(a.sample_index || 0) - Number(b.sample_index || 0));
+  const groups = new Map();
+  ordered.forEach((frame) => {
+    const key = Number.isInteger(Number(frame.clip_index)) ? Number(frame.clip_index) : 0;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(frame);
+  });
+  const ranges = Array.isArray(clips) && clips.length
+    ? clips
+    : [{ index: 0, start_sec: frameTimeline(ordered[0]), end_sec: frameTimeline(ordered.at(-1)) + interval }];
+  const selected = [];
+  const selectedSet = new Set();
+  ranges.forEach((clip) => {
+    const clipIndex = Number.isInteger(Number(clip?.index)) ? Number(clip.index) : 0;
+    const group = groups.get(clipIndex) || (ranges.length === 1 ? ordered : []);
+    if (!group.length) return;
+    const start = Number.isFinite(Number(clip?.start_sec)) ? Number(clip.start_sec) : frameTimeline(group[0]);
+    const end = Math.max(start, Number.isFinite(Number(clip?.end_sec)) ? Number(clip.end_sec) : frameTimeline(group.at(-1)) + interval);
+    let cursor = 0;
+    for (let target = start; target < end - 0.000001; target += interval) {
+      while (cursor + 1 < group.length && Math.abs(frameTimeline(group[cursor + 1]) - target) <= Math.abs(frameTimeline(group[cursor]) - target)) cursor += 1;
+      const frame = group[cursor];
+      if (!frame || frameTimeline(frame) < start - interval || frameTimeline(frame) >= end + interval) continue;
+      if (!selectedSet.has(frame)) {
+        selectedSet.add(frame);
+        selected.push(frame);
+      }
+    }
+    if (!selectedSet.has(group[0])) {
+      selectedSet.add(group[0]);
+      selected.push(group[0]);
+    }
+  });
+  return selected.sort((a, b) => frameTimeline(a) - frameTimeline(b) || Number(a.sample_index || 0) - Number(b.sample_index || 0));
+}
+
+function numericBox(value) {
+  if (!Array.isArray(value) || value.length < 4) return null;
+  const box = value.slice(0, 4).map(Number);
+  return box.every((item) => Number.isFinite(item)) ? box : null;
+}
+
+function normalizedXyxyToPixels(box, width, height) {
+  if (!box) return null;
+  return [box[0] * width, box[1] * height, box[2] * width, box[3] * height];
+}
+
+function yoloToPixels(box, width, height) {
+  if (!box) return null;
+  const [centerX, centerY, boxWidth, boxHeight] = box;
+  return [(centerX - boxWidth / 2) * width, (centerY - boxHeight / 2) * height, (centerX + boxWidth / 2) * width, (centerY + boxHeight / 2) * height];
+}
+
 function normalizeDocument(raw) {
   const doc = raw && typeof raw === 'object' ? raw : createDemoDocument();
+  adaptInferenceOutputDocument(doc);
   doc.classes = Array.isArray(doc.classes) && doc.classes.length ? doc.classes : [{ id: 0, name: 'object' }];
   doc.video = { width: 1280, height: 960, source_duration_sec: 0, sampled_frame_count: 0, ...(doc.video || {}) };
   doc.sampling = { source_fps: 25, sample_fps: 5, source_frame_stride: 5, ...(doc.sampling || {}) };
+  const inputSampleFps = Number(doc.sampling.sample_fps) > 0 ? Number(doc.sampling.sample_fps) : 5;
+  const inputSourceStride = Number(doc.sampling.source_frame_stride) > 0 ? Number(doc.sampling.source_frame_stride) : Number(doc.sampling.source_fps) / inputSampleFps;
   const rawFrames = Array.isArray(doc.frames) ? doc.frames : [];
-  doc.frames = rawFrames.map((frame, index) => ({
-    ...frame,
-    sample_index: Number(frame.sample_index ?? index),
-    source_frame_index: Number(frame.source_frame_index ?? index),
-    timestamp_sec: Number(frame.timestamp_sec ?? 0),
-    detections: Array.isArray(frame.detections) ? frame.detections.map((detection) => ({
-      ...detection,
-      class_id: Number(detection.class_id ?? 0),
-      label: String(detection.label || doc.classes[0]?.name || 'object'),
-      confidence: Number(detection.confidence ?? 1),
-      bbox_xyxy_pixels: Array.isArray(detection.bbox_xyxy_pixels) ? detection.bbox_xyxy_pixels.map(Number) : [0, 0, 1, 1],
-      bbox_yolo_normalized: Array.isArray(detection.bbox_yolo_normalized) ? detection.bbox_yolo_normalized.map(Number) : [0, 0, 0, 0],
-    })) : [],
-    raw_model_answer: frame.raw_model_answer || '',
-    review_status: String(frame.review_status || 'unreviewed').toLowerCase(),
-    reviewed_at_utc: frame.reviewed_at_utc,
-    review_flags: Array.isArray(frame.review_flags) ? frame.review_flags : [],
-    clip_index: explicitClipIndex(frame),
-  }));
-  doc.clips = deriveDocumentClips(doc, rawFrames, raw);
+  const sourceFps = Number(doc.sampling.source_fps) > 0 ? Number(doc.sampling.source_fps) : 25;
+  const useRenderedTimeline = Boolean(doc.rendered_sampled_video || doc.video.rendered_sampled_video);
+  doc.frames = rawFrames.map((frame, index) => {
+    const sourceTimestamp = finiteNumber(frame.timestamp_sec, frame.timestampSeconds, frame.outputTimestampSeconds, index / inputSampleFps) ?? 0;
+    const outputTimestamp = finiteNumber(frame.output_timestamp_sec, frame.outputTimestampSeconds);
+    const timestamp = useRenderedTimeline && outputTimestamp != null ? outputTimestamp : sourceTimestamp;
+    const sampleIndex = finiteNumber(frame.sample_index, frame.sampleIndex, index) ?? index;
+    const sourceFrameIndex = finiteNumber(frame.source_frame_index, frame.sourceFrameIndex, frame.frameIndex, Math.round(sourceTimestamp * sourceFps)) ?? Math.round(sourceTimestamp * sourceFps);
+    const detections = Array.isArray(frame.detections) ? frame.detections.map((detection) => {
+      const classId = finiteNumber(detection.class_id, detection.classId, detection.category_id, detection.categoryId, 0) ?? 0;
+      const classEntry = doc.classes.find((item) => Number(item?.id) === classId);
+      const pixelBox = numericBox(detection.bbox_xyxy_pixels)
+        || numericBox(detection.bboxXyxyPixels)
+        || normalizedXyxyToPixels(numericBox(detection.bbox_xyxy_normalized) || numericBox(detection.bboxXyxyNormalized), Number(doc.video.width) || 1280, Number(doc.video.height) || 960)
+        || yoloToPixels(numericBox(detection.bbox_yolo_normalized) || numericBox(detection.bboxYoloNormalized), Number(doc.video.width) || 1280, Number(doc.video.height) || 960)
+        || [0, 0, 1, 1];
+      const normalizedXyxy = numericBox(detection.bbox_xyxy_normalized) || numericBox(detection.bboxXyxyNormalized)
+        || [pixelBox[0] / (Number(doc.video.width) || 1280), pixelBox[1] / (Number(doc.video.height) || 960), pixelBox[2] / (Number(doc.video.width) || 1280), pixelBox[3] / (Number(doc.video.height) || 960)];
+      const yoloBox = numericBox(detection.bbox_yolo_normalized) || numericBox(detection.bboxYoloNormalized) || normalizeYolo(pixelBox, Number(doc.video.width) || 1280, Number(doc.video.height) || 960);
+      return {
+        ...detection,
+        class_id: classId,
+        label: String(detection.label ?? detection.className ?? detection.class_name ?? classEntry?.name ?? doc.classes[0]?.name ?? 'object'),
+        confidence: Number(detection.confidence ?? detection.score ?? detection.probability ?? 1),
+        bbox_xyxy_pixels: pixelBox.map(Number),
+        bbox_xyxy_normalized: normalizedXyxy.map(Number),
+        bbox_yolo_normalized: yoloBox.map(Number),
+      };
+    }) : [];
+    return {
+      ...frame,
+      sample_index: sampleIndex,
+      source_frame_index: sourceFrameIndex,
+      timestamp_sec: timestamp,
+      source_timestamp_sec: sourceTimestamp,
+      output_timestamp_sec: outputTimestamp,
+      detections,
+      raw_model_answer: frame.raw_model_answer ?? frame.rawModelAnswer ?? '',
+      review_status: String(frame.review_status ?? frame.reviewStatus ?? 'unreviewed').toLowerCase(),
+      reviewed_at_utc: frame.reviewed_at_utc ?? frame.reviewedAtUtc,
+      review_flags: Array.isArray(frame.review_flags) ? frame.review_flags : Array.isArray(frame.reviewFlags) ? frame.reviewFlags : [],
+      clip_index: explicitClipIndex(frame),
+    };
+  });
+  doc.clips = deriveDocumentClips(doc, doc.frames, raw);
   doc.frames.sort((a, b) => a.timeline_sec - b.timeline_sec || a.sample_index - b.sample_index);
-  if (!doc.video.sampled_frame_count) doc.video.sampled_frame_count = doc.frames.length;
+  const inputFrameCount = Number(doc.video.input_sampled_frame_count || doc.video.sampled_frame_count) || doc.frames.length;
+  doc.frames = sampleReviewFrames(doc.frames, doc.clips, REVIEW_SAMPLE_INTERVAL_SEC);
+  doc.sampling = {
+    ...doc.sampling,
+    input_sample_fps: inputSampleFps,
+    input_source_frame_stride: inputSourceStride,
+    review_interval_sec: REVIEW_SAMPLE_INTERVAL_SEC,
+    sample_fps: REVIEW_SAMPLE_FPS,
+    source_frame_stride: Number(doc.sampling.source_fps) > 0 ? Number(doc.sampling.source_fps) * REVIEW_SAMPLE_INTERVAL_SEC : 250,
+  };
+  doc.video.input_sampled_frame_count = inputFrameCount;
+  doc.video.sampled_frame_count = doc.frames.length;
   if (!doc.video.source_duration_sec && doc.frames.length) doc.video.source_duration_sec = doc.frames[doc.frames.length - 1].timeline_sec;
   return doc;
 }
@@ -1305,7 +1471,7 @@ function formatTime(seconds, frames = false) {
   const hours = Math.floor(safe / 3600);
   const minutes = Math.floor((safe % 3600) / 60);
   const secs = Math.floor(safe % 60);
-  const fraction = frames ? Math.floor((safe % 1) * (state.doc?.sampling?.sample_fps || 5)) : Math.floor((safe % 1) * 10);
+  const fraction = frames ? Math.floor((safe % 1) * (Number(state.doc?.sampling?.source_fps) || 25)) : Math.floor((safe % 1) * 10);
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}${frames ? `:${String(fraction).padStart(2, '0')}` : `.${fraction}`}`;
 }
 
@@ -1850,7 +2016,7 @@ function renderBatchErasePanel() {
   if (!active) return;
   const { clip, duration } = batchEraseBounds();
   if (!clip) return;
-  const sampleStep = Math.max(0.001, 1 / Math.max(1, Number(state.doc?.sampling?.sample_fps) || 5));
+  const sampleStep = reviewSampleStep();
   $('#batch-erase-clip').textContent = `${clip.name || `Clip ${state.batchErase.clipIndex + 1}`} only`;
   const regionList = $('#batch-region-list');
   regionList.replaceChildren();
@@ -1944,7 +2110,9 @@ function startPlayback() {
   state.playing = true;
   $('#play-icon').innerHTML = icon('pause');
   clearTimeout(state.playTimer);
-  const sampleFps = Math.max(0.25, Number(state.doc.sampling?.sample_fps) || 5);
+  // Playback remains responsive even though the underlying review samples
+  // are ten seconds apart; this is a UI preview speed, not source decoding.
+  const sampleFps = REVIEW_PLAYBACK_FPS;
   const frameDelay = Math.max(40, Math.round(1000 / sampleFps));
   const advance = async () => {
     if (!state.playing) return;
@@ -2175,7 +2343,7 @@ function updateVideoTimebar(timeOverride = null) {
   const current = Math.max(0, Math.min(duration, Number(timeOverride ?? frameTimeline(frame)) || 0));
   slider.min = '0';
   slider.max = String(duration);
-  slider.step = String(Math.max(0.001, 1 / Math.max(1, Number(state.doc?.sampling?.sample_fps) || 5)));
+  slider.step = String(reviewSampleStep());
   slider.value = String(current);
   slider.setAttribute('aria-valuetext', `${formatClipClock(current)} of ${formatClipClock(duration)}`);
   const progress = duration ? current / duration * 100 : 0;
@@ -2239,7 +2407,7 @@ function updateClipTimebar(timelineOverride = null) {
   slider.disabled = position.duration <= 0;
   slider.min = '0';
   slider.max = String(Math.max(position.duration, 0.001));
-  slider.step = String(Math.max(0.001, 1 / Math.max(1, Number(state.doc?.sampling?.sample_fps) || 5)));
+  slider.step = String(reviewSampleStep());
   slider.value = String(position.current);
   slider.setAttribute('aria-valuetext', `${formatTime(position.current)} of ${formatTime(position.duration)} in ${clipLabel}`);
   slider.style.setProperty('--timebar-progress', `${position.duration ? position.current / position.duration * 100 : 0}%`);
@@ -3062,7 +3230,7 @@ function updateHeatmapTimebars(timeOverride = null) {
     globalSlider.disabled = !duration;
     globalSlider.min = '0';
     globalSlider.max = String(Math.max(0.001, duration));
-    globalSlider.step = String(Math.max(0.001, 1 / Math.max(1, Number(state.doc?.sampling?.sample_fps) || 5)));
+    globalSlider.step = String(reviewSampleStep());
     globalSlider.value = String(timeline);
     globalSlider.style.setProperty('--timebar-progress', `${duration ? timeline / duration * 100 : 0}%`);
     globalSlider.setAttribute('aria-valuetext', `${formatClipClock(timeline)} of ${formatClipClock(duration)}`);
@@ -3095,7 +3263,7 @@ function updateHeatmapTimebars(timeOverride = null) {
     clipSlider.disabled = !clip || clipPosition.duration <= 0;
     clipSlider.min = '0';
     clipSlider.max = String(Math.max(0.001, clipPosition.duration));
-    clipSlider.step = String(Math.max(0.001, 1 / Math.max(1, Number(state.doc?.sampling?.sample_fps) || 5)));
+    clipSlider.step = String(reviewSampleStep());
     clipSlider.value = String(clipPosition.current);
     clipSlider.style.setProperty('--timebar-progress', `${clipPosition.duration ? clipPosition.current / clipPosition.duration * 100 : 0}%`);
   }
@@ -3428,7 +3596,7 @@ function reportSelectedClip() {
 
 function reportClipFrameIndex(clip, edge = 'start') {
   if (!clip) return -1;
-  const sampleStep = 1 / Math.max(1, Number(state.doc?.sampling?.sample_fps) || 5);
+  const sampleStep = reviewSampleStep();
   const start = Math.max(0, Number(clip.start_sec) || 0);
   const end = Math.max(start, Number(clip.end_sec) || start);
   const time = edge === 'end' ? Math.max(start, end - sampleStep) : start;
@@ -3561,7 +3729,7 @@ function updateReportTimebars(timeOverride = null, { syncSelection = false } = {
     if (containing) state.report.selectedClipId = containing.id;
   }
   const clip = reportSelectedClip();
-  const step = Math.max(0.001, 1 / Math.max(1, Number(state.doc?.sampling?.sample_fps) || 5));
+  const step = reviewSampleStep();
   const videoSlider = $('#report-video-time-slider');
   if (videoSlider) {
     videoSlider.disabled = duration <= 0;
@@ -3612,8 +3780,7 @@ function clipTimepoints(clip, intervalSec) {
 function reportCaptureKey(clip, localTime) { return `${clip.id}:${Number(localTime).toFixed(3)}`; }
 
 function reportSampleTolerance() {
-  const sampleFps = Math.max(1, Number(state.doc?.sampling?.sample_fps || 1));
-  return Math.max(0.75, 2 / sampleFps);
+  return Math.max(0.75, reviewSampleStep() / 2);
 }
 
 function nearestFrameAtTimeline(time, tolerance = Infinity, clip = null) {
@@ -4173,7 +4340,7 @@ function renderDocumentInfo() {
   const title = state.sourceJsonName === 'demo-labels.json' ? 'Demo frame slice' : state.sourceJsonName ? state.sourceJsonName.replace(/\.json$/i, '') : videoTitle;
   const mediaStatus = state.videoFile ? `video ${formatClipClock(reportDurationSec())}` : state.recoveryVideo?.name ? 'video needs reload' : 'video not loaded';
   $('#document-title').textContent = title;
-  $('#document-subtitle').textContent = `${state.doc.schema || 'label document'} / ${state.doc.frames.length.toLocaleString()} sampled frames / ${mediaStatus}`;
+  $('#document-subtitle').textContent = `${state.doc.schema || 'label document'} / ${state.doc.frames.length.toLocaleString()} review samples / 1 frame per 10 sec / ${mediaStatus}`;
   const hasReview = state.doc.frames.some((frame) => frame.review_status !== 'unreviewed');
   $('#document-status').textContent = hasReview ? 'REVIEW COPY' : !state.sourceJsonName && state.videoFile ? 'VIDEO ONLY' : 'MACHINE GENERATED';
 }
@@ -4320,9 +4487,34 @@ function expectedVideoFileName() {
   return fileNameOnly(state.doc?.source_video || state.doc?.video?.source_video || '');
 }
 
+function expectedVideoFileNames() {
+  if (state.sourceJsonName === 'demo-labels.json') return [];
+  const values = [
+    state.doc?.source_video,
+    state.doc?.video?.source_video,
+    state.doc?.rendered_video,
+    state.doc?.video?.rendered_video,
+    state.doc?.outputs?.renderedVideo,
+    state.doc?.outputs?.renderedVideoInfo?.path,
+  ].map(fileNameOnly).filter(Boolean);
+  return [...new Set(values)];
+}
+
+function comparableVideoStem(value) {
+  return fileNameOnly(value).replace(/\.[^.]+$/, '').replace(/[^a-z0-9]+/g, '');
+}
+
 function videoMatchesDocument(file = state.videoFile) {
-  const expected = expectedVideoFileName();
-  return !expected || !file || fileNameOnly(file.name) === expected;
+  const expectedNames = expectedVideoFileNames();
+  if (!expectedNames.length || !file) return true;
+  const actualName = fileNameOnly(file.name);
+  if (expectedNames.includes(actualName)) return true;
+  const actualStem = comparableVideoStem(actualName);
+  if (actualStem.length < 12) return false;
+  return expectedNames.some((name) => {
+    const expectedStem = comparableVideoStem(name);
+    return expectedStem.length >= 12 && (actualStem.includes(expectedStem) || expectedStem.includes(actualStem));
+  });
 }
 
 function clearVideoCanvas() {
