@@ -60,11 +60,11 @@
 
         <div class="topbar-actions">
           <span class="sync-label"><span class="status-dot online"></span><span id="save-state">Demo loaded</span></span>
-          <button class="button button-quiet file-import-button" type="button" data-action="open-json" id="json-import-button" aria-label="Choose label JSON" title="Choose label JSON">
-            <span class="icon" data-icon="report"></span><span data-import-label>Open JSON</span>
+          <button class="button button-quiet file-import-button" type="button" data-action="open-json" id="json-import-button" aria-label="Choose one or more label JSON files" title="Choose one or more label JSON files">
+            <span class="icon" data-icon="report"></span><span data-import-label>Open JSON files</span>
           </button>
-          <button class="button button-quiet file-import-button" type="button" data-action="open-video" id="video-import-button" aria-label="Choose source video" title="Choose source video">
-            <span class="icon" data-icon="film"></span><span data-import-label>Open video</span>
+          <button class="button button-quiet file-import-button" type="button" data-action="open-video" id="video-import-button" aria-label="Choose one or more source videos" title="Choose one or more source videos">
+            <span class="icon" data-icon="film"></span><span data-import-label>Open videos</span>
           </button>
           <button class="button button-primary" type="button" data-action="save-json" id="save-button" aria-label="Download reviewed JSON">
             <span class="icon" data-icon="download"></span><span>Export JSON</span>
@@ -112,7 +112,7 @@
                 </div>
               </div>
               <div class="frame-stage-shell">
-                <div id="frame-stage" class="frame-stage" tabindex="0" aria-label="Frame canvas. Select a box to move or resize it, or choose an annotation tool from the box inspector.">
+                <div id="frame-stage" class="frame-stage" tabindex="0" aria-label="Frame canvas. Drag on an empty area to add a box, or click a box to select it and drag it to move or resize it.">
                   <div class="stage-grid" aria-hidden="true"></div>
                   <img id="frame-image" class="frame-image" src="./public/demo-frame.jpg" alt="Thermal video frame" />
                   <video id="frame-video" class="frame-video" preload="metadata" muted playsinline aria-hidden="true"></video>
@@ -167,7 +167,7 @@
               </div>
               <div class="inspector-body box-inspector-body">
                 <div class="annotation-toolbox" role="toolbar" aria-label="Box editing tools">
-                  <button class="annotation-tool is-active" type="button" data-action="annotation-tool" data-tool="select" aria-pressed="true" data-tooltip="Select, move, or resize a box">
+                  <button class="annotation-tool is-active" type="button" data-action="annotation-tool" data-tool="select" aria-pressed="true" data-tooltip="Select, move, or resize a box; drag an empty area to add one">
                     <span class="icon" data-icon="pointer"></span><span>Select</span>
                   </button>
                   <button class="annotation-tool" type="button" data-action="annotation-tool" data-tool="draw" aria-pressed="false" data-tooltip="Drag on the frame to add a box">
@@ -371,25 +371,6 @@
                   </div>
                   <div id="report-clip-list" class="report-clip-list"></div>
                 </aside>
-                <section class="report-clip-inspector" aria-label="Selected report clip timeline">
-                  <div class="report-clip-inspector-heading">
-                    <div><span class="section-kicker">CLIP REPORT</span><h2 id="report-active-clip-title">Clip 1 report</h2></div>
-                    <button class="button" type="button" data-action="focus-report-clip"><span class="icon" data-icon="eye"></span><span>View report</span></button>
-                  </div>
-                  <div class="report-timebar-stack" aria-label="Report frame navigation timelines">
-                    <div class="video-timebar clip-timebar" aria-label="Selected report clip timeline">
-                      <span id="report-clip-time-label" class="video-timebar-label">Clip</span>
-                      <div class="video-timebar-track"><input id="report-clip-time-slider" class="video-time-slider" type="range" min="0" max="1" value="0" step="0.2" aria-label="Time within selected report clip" /></div>
-                      <span class="video-timebar-value"><span id="report-clip-time-current">00:00:00.0</span><span class="video-time-separator"> / </span><span id="report-clip-time-end">00:00:00.0</span></span>
-                    </div>
-                    <div class="video-timebar global-timebar" aria-label="Full report video timeline">
-                      <span class="video-timebar-label">Video</span>
-                      <div class="video-timebar-track"><input id="report-video-time-slider" class="video-time-slider" type="range" min="0" max="1" value="0" step="0.2" aria-label="Time in full report video" /></div>
-                      <span class="video-timebar-value"><span id="report-video-time-current">00:00:00</span><span class="video-time-separator"> / </span><span id="report-video-time-end">00:00:00</span></span>
-                    </div>
-                  </div>
-                  <p id="report-clip-time-note" class="report-clip-time-note">Click a clip thumbnail or timeline to inspect its source frame.</p>
-                </section>
               </section>
             </aside>
 
@@ -414,8 +395,8 @@
       </main>
     </div>
 
-    <input id="json-input" type="file" accept=".json,application/json" hidden />
-    <input id="video-input" type="file" accept="video/*,.mp4,.mov,.webm" hidden />
+          <input id="json-input" type="file" accept=".json,application/json" multiple hidden />
+          <input id="video-input" type="file" accept="video/*,.mp4,.mov,.webm,.m4v" multiple hidden />
     <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
     <div id="clip-dialog" class="dialog-backdrop" hidden>
       <section class="clip-dialog" role="dialog" aria-modal="true" aria-labelledby="clip-dialog-title">

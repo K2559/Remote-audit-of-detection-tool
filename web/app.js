@@ -77,8 +77,13 @@ function icon(name) {
 const state = {
   doc: null,
   sourceJsonName: 'demo-labels.json',
+  sourceJsonNames: ['demo-labels.json'],
   videoFile: null,
   videoUrl: '',
+  videoFiles: [],
+  videoSources: [],
+  activeVideoSourceIndex: null,
+  jsonFiles: [],
   videoTargetTime: null,
   videoDisplayedTime: null,
   videoRequestedTime: null,
@@ -135,6 +140,7 @@ const state = {
   recoverySavedAt: '',
   recoveryRestored: false,
   recoveryVideo: null,
+  recoveryVideos: [],
   view: 'review',
   tableFilter: 'all',
   tableQuery: '',
@@ -157,6 +163,9 @@ const state = {
     batchPrint: false,
     captures: [],
     baseImages: {},
+    heatmapFrameSelections: {},
+    heatmapImages: {},
+    heatmapCaptureToken: 0,
     preparing: false,
   },
 };
@@ -176,7 +185,7 @@ function recoverySourceSignature() {
   const frames = state.doc?.frames || [];
   const sourceVideo = String(state.doc?.source_video || state.doc?.video?.source_video || '').toLowerCase();
   return [
-    String(state.sourceJsonName || '').toLowerCase(),
+    (state.sourceJsonNames || [state.sourceJsonName]).join(',').toLowerCase(),
     sourceVideo,
     frames.length,
     frames[0]?.sample_index ?? '',
@@ -199,6 +208,21 @@ function recoveryVideoMetadata() {
   };
 }
 
+function recoveryVideoMetadataList() {
+  const sources = Array.isArray(state.videoSources) && state.videoSources.length
+    ? state.videoSources
+    : state.recoveryVideos || [];
+  return sources.map((source) => ({
+    name: String(source.file?.name || source.name || '').trim(),
+    type: source.file?.type || source.type || '',
+    size: Number(source.file?.size ?? source.size) || 0,
+    lastModified: Number(source.file?.lastModified ?? source.lastModified) || 0,
+    duration: Number(source.duration) || 0,
+    width: Number(source.width) || 0,
+    height: Number(source.height) || 0,
+  })).filter((source) => source.name);
+}
+
 function createRecoverySnapshot(savedAt = new Date().toISOString()) {
   if (!state.doc?.frames?.length) return null;
   return {
@@ -206,7 +230,9 @@ function createRecoverySnapshot(savedAt = new Date().toISOString()) {
     schemaVersion: RECOVERY_SCHEMA_VERSION,
     savedAt,
     sourceJsonName: state.sourceJsonName,
+    sourceJsonNames: [...(state.sourceJsonNames || [state.sourceJsonName]).filter(Boolean)],
     video: recoveryVideoMetadata(),
+    videos: recoveryVideoMetadataList(),
     frameIndex: state.frameIndex,
     selectedDetection: state.selectedDetection,
     showBoxes: state.showBoxes,
@@ -225,6 +251,7 @@ function createRecoverySnapshot(savedAt = new Date().toISOString()) {
       clipCutsText: state.report.clipCutsText,
       selectedClipId: state.report.selectedClipId,
       selectedClipIds: state.report.selectedClipIds,
+      heatmapFrameSelections: state.report.heatmapFrameSelections,
     },
   };
 }
@@ -446,6 +473,11 @@ function applyRecoveryCheckpoint(checkpoint) {
     batchPrint: false,
     captures: [],
     baseImages: {},
+    heatmapFrameSelections: savedReport.heatmapFrameSelections && typeof savedReport.heatmapFrameSelections === 'object'
+      ? Object.fromEntries(Object.entries(savedReport.heatmapFrameSelections).map(([key, value]) => [String(key), String(value)]))
+      : {},
+    heatmapImages: {},
+    heatmapCaptureToken: 0,
     preparing: false,
     preparePromise: null,
   };
@@ -454,6 +486,14 @@ function applyRecoveryCheckpoint(checkpoint) {
   }
   state.recoveryRestored = true;
   state.recoveryVideo = checkpoint.video && typeof checkpoint.video === 'object' ? checkpoint.video : null;
+  state.recoveryVideos = Array.isArray(checkpoint.videos) ? checkpoint.videos : (state.recoveryVideo ? [state.recoveryVideo] : []);
+  state.sourceJsonNames = Array.isArray(checkpoint.sourceJsonNames) && checkpoint.sourceJsonNames.length
+    ? checkpoint.sourceJsonNames.map(String)
+    : [state.sourceJsonName].filter(Boolean);
+  state.videoFiles = [];
+  state.videoSources = [];
+  state.activeVideoSourceIndex = null;
+  state.jsonFiles = [];
   state.recoverySavedAt = String(checkpoint.savedAt || '');
   state.recoveryRevision = 0;
   state.recoverySavedRevision = 0;
@@ -527,6 +567,128 @@ function createVideoOnlyDocument(file, duration, width, height) {
     clips: createClipRangesFromCuts([], mediaDuration, 'video'),
     frames,
   });
+}
+
+function importStem(value) {
+  return comparableVideoStem(value)
+    .replace(/(?:label|labels|reviewed|detections?|annotations?)$/i, '')
+    .replace(/(?:json|video)$/i, '');
+}
+
+function importStemsMatch(left, right) {
+  const a = importStem(left);
+  const b = importStem(right);
+  if (!a || !b) return false;
+  return a === b || (a.length >= 12 && b.length >= 12 && (a.includes(b) || b.includes(a)));
+}
+
+function buildImportPairs(videoFiles = [], jsonFiles = []) {
+  const videos = [...videoFiles];
+  const jsons = [...jsonFiles];
+  const usedJson = new Set();
+  const pairs = [];
+  videos.forEach((video, videoIndex) => {
+    let jsonIndex = jsons.findIndex((json, index) => !usedJson.has(index) && importStemsMatch(video.name, json.name));
+    if (jsonIndex < 0 && jsons[videoIndex] && !usedJson.has(videoIndex)) jsonIndex = videoIndex;
+    if (jsonIndex >= 0) usedJson.add(jsonIndex);
+    pairs.push({ video, json: jsonIndex >= 0 ? jsons[jsonIndex] : null, videoIndex, jsonIndex: jsonIndex >= 0 ? jsonIndex : null });
+  });
+  jsons.forEach((json, jsonIndex) => {
+    if (!usedJson.has(jsonIndex)) pairs.push({ video: null, json, videoIndex: null, jsonIndex });
+  });
+  return pairs;
+}
+
+function mergeImportedDocuments(entries = []) {
+  const validEntries = entries.filter((entry) => entry?.doc && (entry.doc.frames?.length || Number(entry.video?.duration) > 0));
+  if (!validEntries.length) return null;
+  const classes = [];
+  const classKeys = new Set();
+  const frames = [];
+  const clips = [];
+  const sources = [];
+  let cursor = 0;
+  let sampleIndex = 0;
+  let width = 0;
+  let height = 0;
+  let sourceFps = 25;
+
+  validEntries.forEach((entry) => {
+    const doc = entry.doc;
+    (doc.classes || []).forEach((item, index) => {
+      const key = `${item?.id ?? index}:${String(item?.name || item?.label || 'object').toLowerCase()}`;
+      if (classKeys.has(key)) return;
+      classKeys.add(key);
+      classes.push({ ...item, id: Number.isFinite(Number(item?.id)) ? Number(item.id) : classes.length, name: String(item?.name || item?.label || 'object') });
+    });
+    const media = entry.video || {};
+    width = Math.max(width, Number(media.width) || Number(doc.video?.width) || 0);
+    height = Math.max(height, Number(media.height) || Number(doc.video?.height) || 0);
+    sourceFps = Number(doc.sampling?.source_fps) > 0 ? Number(doc.sampling.source_fps) : sourceFps;
+    const localFrames = [...(doc.frames || [])].sort((a, b) => Number(a.timestamp_sec || 0) - Number(b.timestamp_sec || 0));
+    const declaredDuration = Number(media.duration) || Number(doc.video?.source_duration_sec) || 0;
+    const lastLocalTime = localFrames.length ? Math.max(...localFrames.map((frame) => Number(frame.timestamp_sec ?? frame.timeline_sec ?? 0) || 0)) : 0;
+    const localDuration = declaredDuration > 0
+      ? Math.max(declaredDuration, lastLocalTime + 0.001)
+      : Math.max(0.001, lastLocalTime + REVIEW_SAMPLE_INTERVAL_SEC);
+    const clipIndex = clips.length;
+    const sourceVideo = String(media.name || entry.video?.file?.name || doc.source_video || '');
+    const sourceJson = String(entry.jsonName || '');
+    const clipName = String(entry.clipName || sourceVideo || sourceJson || `Clip ${clipIndex + 1}`).replace(/\.[^.]+$/, '');
+    const sourceRecord = {
+      index: entry.videoIndex == null ? null : Number(entry.videoIndex),
+      video_name: sourceVideo,
+      json_name: sourceJson,
+      duration: localDuration,
+      width: Number(media.width) || Number(doc.video?.width) || 0,
+      height: Number(media.height) || Number(doc.video?.height) || 0,
+    };
+    sources.push(sourceRecord);
+    clips.push({
+      id: `clip-${clipIndex + 1}`,
+      index: clipIndex,
+      name: clipName,
+      start_sec: Number(cursor.toFixed(3)),
+      end_sec: Number((cursor + localDuration).toFixed(3)),
+      source: 'metadata',
+      source_video: sourceVideo,
+      source_json: sourceJson,
+      source_video_index: entry.videoIndex == null ? null : Number(entry.videoIndex),
+      source_json_index: entry.jsonIndex == null ? null : Number(entry.jsonIndex),
+    });
+    localFrames.forEach((frame) => {
+      const localTime = Math.max(0, Number(frame.timestamp_sec ?? frame.timeline_sec ?? 0) || 0);
+      frames.push({
+        ...deepClone(frame),
+        sample_index: sampleIndex,
+        source_sample_index: frame.sample_index,
+        timestamp_sec: Number(localTime.toFixed(3)),
+        timeline_sec: Number((cursor + localTime).toFixed(3)),
+        clip_index: clipIndex,
+        clip_time_sec: Number(localTime.toFixed(3)),
+        source_video_index: entry.videoIndex == null ? null : Number(entry.videoIndex),
+        source_json_index: entry.jsonIndex == null ? null : Number(entry.jsonIndex),
+      });
+      sampleIndex += 1;
+    });
+    cursor += localDuration;
+  });
+
+  const videoNames = sources.map((source) => source.video_name).filter(Boolean);
+  const jsonNames = sources.map((source) => source.json_name).filter(Boolean);
+  return {
+    schema: 'locateanything-llm-pseudo-labels/1.0',
+    annotation_status: 'machine_generated_unreviewed',
+    source_video: videoNames.length === 1 ? videoNames[0] : '',
+    source_videos: videoNames,
+    source_json_files: jsonNames,
+    classes: classes.length ? classes : [{ id: 0, name: 'object' }],
+    sampling: { source_fps: sourceFps, sample_fps: REVIEW_SAMPLE_FPS, source_frame_stride: sourceFps * REVIEW_SAMPLE_INTERVAL_SEC, review_interval_sec: REVIEW_SAMPLE_INTERVAL_SEC },
+    video: { width: width || 1280, height: height || 960, source_frame_count: Math.max(1, Math.round(cursor * sourceFps)), sampled_frame_count: frames.length, source_duration_sec: Number(cursor.toFixed(3)), sources },
+    summary: { detected_sampled_frames: frames.filter((frame) => frame.detections?.length).length, total_boxes: frames.reduce((sum, frame) => sum + (frame.detections?.length || 0), 0) },
+    clips,
+    frames: frames.sort((a, b) => a.timeline_sec - b.timeline_sec || a.sample_index - b.sample_index),
+  };
 }
 
 function normalizeYolo(box, width, height) {
@@ -634,7 +796,7 @@ function normalizeExplicitClips(raw, duration) {
     const sourceType = ['metadata', 'heatmap', 'manual', 'detected', 'labels', 'inferred', 'video'].includes(savedSource)
       ? savedSource
       : 'metadata';
-    return { id: String(item.id || `clip-${index + 1}`), index, name: clipLabel(index, item), start_sec: start, end_sec: end, source: sourceType };
+    return { ...item, id: String(item.id || `clip-${index + 1}`), index, name: clipLabel(index, item), start_sec: start, end_sec: end, source: sourceType };
   });
   clips.forEach((clip, index) => {
     if (clip.end_sec <= clip.start_sec) clip.end_sec = clips[index + 1]?.start_sec || duration || clip.start_sec;
@@ -686,10 +848,12 @@ function deriveDocumentClips(doc, rawFrames, raw) {
       let clip = explicitIndex != null ? clips.find((item) => item.source_index === explicitIndex || item.index === explicitIndex) : null;
       if (!clip) clip = clips.find((item, index) => frame.timestamp_sec >= item.start_sec && (frame.timestamp_sec < item.end_sec || index === clips.length - 1));
       clip ||= frame.timestamp_sec < clips[0].start_sec ? clips[0] : clips.at(-1);
+      const explicitTimeline = frame.timeline_sec == null ? null : finiteNumber(frame.timeline_sec);
       const timestampLooksLocal = frame.timestamp_sec < clip.start_sec - expected;
-      frame.timeline_sec = timestampLooksLocal ? clip.start_sec + frame.timestamp_sec : frame.timestamp_sec;
+      frame.timeline_sec = explicitTimeline ?? (timestampLooksLocal ? clip.start_sec + frame.timestamp_sec : frame.timestamp_sec);
       frame.clip_index = clip.index;
-      frame.clip_time_sec = Math.max(0, frame.timeline_sec - clip.start_sec);
+      const explicitClipTime = frame.clip_time_sec == null ? null : finiteNumber(frame.clip_time_sec);
+      frame.clip_time_sec = explicitClipTime ?? Math.max(0, frame.timeline_sec - clip.start_sec);
     });
     return clips;
   }
@@ -965,11 +1129,63 @@ function currentFrame() { return state.doc?.frames?.[state.frameIndex] || null; 
 function frameTimeline(frame) { return Number(frame?.timeline_sec ?? frame?.timestamp_sec ?? 0); }
 function frameClipTime(frame) { return Number(frame?.clip_time_sec ?? frame?.timestamp_sec ?? 0); }
 function durationSec() { return Number(state.doc?.video?.source_duration_sec || frameTimeline(state.doc?.frames?.at(-1)) || 0); }
-function videoWidth() { return Math.max(1, Number(state.doc?.video?.width || 1280)); }
-function videoHeight() { return Math.max(1, Number(state.doc?.video?.height || 960)); }
+function videoWidth() {
+  const source = videoSourceForFrame(currentFrame());
+  return Math.max(1, Number(source?.width || state.doc?.video?.width || 1280));
+}
+function videoHeight() {
+  const source = videoSourceForFrame(currentFrame());
+  return Math.max(1, Number(source?.height || state.doc?.video?.height || 960));
+}
+
+function hasMultipleVideoSources() {
+  return Array.isArray(state.videoSources) && state.videoSources.length > 1;
+}
+
+function hasImportedClipSources() {
+  const sources = state.doc?.video?.sources;
+  return Boolean((Array.isArray(sources) && sources.length > 1)
+    || state.doc?.clips?.some((clip) => clip?.source_video_index != null || clip?.source_json_index != null));
+}
+
+function validVideoSourceIndex(value) {
+  if (value == null || value === '') return null;
+  const index = Number(value);
+  return Number.isInteger(index) && index >= 0 ? index : null;
+}
+
+function videoSourceIndexForClip(clip) {
+  return validVideoSourceIndex(clip?.source_video_index);
+}
+
+function videoSourceIndexForFrame(frame) {
+  const clip = state.doc?.clips?.[frame?.clip_index ?? 0];
+  return validVideoSourceIndex(frame?.source_video_index) ?? validVideoSourceIndex(clip?.source_video_index);
+}
+
+function videoSourceForFrame(frame) {
+  const sourceIndex = videoSourceIndexForFrame(frame);
+  return sourceIndex == null ? null : state.videoSources[sourceIndex] || null;
+}
+
+function usesLocalVideoTimeForSource(sourceIndex) {
+  return hasMultipleVideoSources() || (hasImportedClipSources() && sourceIndex != null);
+}
+
+function usesLocalVideoTimeForFrame(frame) {
+  return usesLocalVideoTimeForSource(videoSourceIndexForFrame(frame));
+}
+
+function usesLocalVideoTimeForClip(clip) {
+  return usesLocalVideoTimeForSource(videoSourceIndexForClip(clip));
+}
+
+function canUseGlobalVideoCache() {
+  return !hasMultipleVideoSources() && !hasImportedClipSources();
+}
 
 function videoTimeForFrame(video, frame) {
-  const target = Math.max(0, frameTimeline(frame));
+  const target = Math.max(0, usesLocalVideoTimeForFrame(frame) ? frameClipTime(frame) : frameTimeline(frame));
   if (!Number.isFinite(video.duration) || video.duration <= 0) return target;
   return Math.min(target, Math.max(0, video.duration - 0.001));
 }
@@ -1266,10 +1482,42 @@ async function seekPresentedVideoFrame(video, time, { signal } = {}) {
   }
 }
 
+async function activateVideoSourceForFrame(video, frame) {
+  const source = videoSourceForFrame(frame);
+  if (!source || state.activeVideoSourceIndex === source.index) return true;
+  const attachmentToken = ++state.videoAttachmentToken;
+  state.videoSeekToken += 1;
+  state.videoSeekAbortController?.abort();
+  state.videoSeekAbortController = null;
+  state.videoSeekPromise = null;
+  stopVideoFramePrefetch();
+  clearVideoFrameCache();
+  state.activeVideoSourceIndex = source.index;
+  state.videoFile = source.file || null;
+  state.videoUrl = source.url || '';
+  state.videoDisplayedTime = null;
+  state.videoRequestedTime = null;
+  state.videoTargetTime = null;
+  if (!state.videoUrl) return false;
+  video.src = state.videoUrl;
+  video.load();
+  try {
+    await waitForVideoMetadata(video);
+    return attachmentToken === state.videoAttachmentToken;
+  } catch (error) {
+    if (attachmentToken === state.videoAttachmentToken) showVideoError('Video could not be decoded');
+    return false;
+  }
+}
+
 function syncVideoToFrame(video, frame) {
   if (!state.videoFile || !frame) return Promise.resolve(false);
+  const source = videoSourceForFrame(frame);
+  if (source && state.activeVideoSourceIndex !== source.index) {
+    return activateVideoSourceForFrame(video, frame).then((ready) => ready ? syncVideoToFrame(video, frame) : false);
+  }
   const decodeStartedAt = performance.now();
-  const requestedTime = Math.max(0, frameTimeline(frame));
+  const requestedTime = Math.max(0, usesLocalVideoTimeForFrame(frame) ? frameClipTime(frame) : frameTimeline(frame));
   const sameRequestedFrame = state.videoSeekPromise && Math.abs(Number(state.videoRequestedTime) - requestedTime) <= 0.001;
   if (sameRequestedFrame) return state.videoSeekPromise;
 
@@ -1286,9 +1534,9 @@ function syncVideoToFrame(video, frame) {
   // During a held Right key, keep the native decoder moving with the visible
   // frame. Consuming only cached bitmaps leaves the video several seconds
   // behind and causes a hard seek when the rolling cache is exhausted.
-  const cachedFrame = preferLiveSequentialDecode(video.currentTime, requestedTime)
+  const cachedFrame = !canUseGlobalVideoCache() ? null : (preferLiveSequentialDecode(video.currentTime, requestedTime)
     ? null
-    : cachedVideoFrame(requestedTime);
+    : cachedVideoFrame(requestedTime));
   if (cachedFrame) {
     state.videoSeekAbortController?.abort();
     state.videoSeekToken += 1;
@@ -1301,7 +1549,7 @@ function syncVideoToFrame(video, frame) {
     setVideoSeeking(false);
     recordVideoDecode('cache', decodeStartedAt);
     renderFrameBoxes();
-    scheduleVideoFramePrefetch(video, state.frameIndex);
+    if (canUseGlobalVideoCache()) scheduleVideoFramePrefetch(video, state.frameIndex);
     return Promise.resolve(true);
   }
 
@@ -1340,8 +1588,10 @@ function syncVideoToFrame(video, frame) {
       setVideoSeeking(false);
       recordVideoDecode(video.dataset?.decodeMode || 'seek', decodeStartedAt);
       renderFrameBoxes();
-      void cachePresentedVideoFrame(video, target, state.videoAttachmentToken);
-      scheduleVideoFramePrefetch(video, state.frameIndex);
+      if (canUseGlobalVideoCache()) {
+        void cachePresentedVideoFrame(video, target, state.videoAttachmentToken);
+        scheduleVideoFramePrefetch(video, state.frameIndex);
+      }
       return true;
     } catch (error) {
       if (token !== state.videoSeekToken) return false;
@@ -1418,6 +1668,7 @@ async function ensureVideoPrefetchDecoders(attachmentToken) {
 }
 
 async function prefetchAdjacentVideoFrames(_video, originIndex, { signal, count = 12 } = {}) {
+  if (hasImportedClipSources()) return;
   const frames = state.doc?.frames || [];
   const attachmentToken = state.videoAttachmentToken;
   const originFrame = frames[originIndex];
@@ -1460,7 +1711,7 @@ function scheduleVideoFramePrefetch(video, originIndex, delay = 0) {
   if (state.videoPrefetchAbortController) return;
   clearTimeout(state.videoPrefetchTimer);
   const rollingReversePrefetch = state.rapidFrameNavigation && state.videoPrefetchDirection < 0;
-  if (!state.videoFile || state.playing || (state.rapidFrameNavigation && !rollingReversePrefetch) || state.view !== 'review') return;
+  if (!state.videoFile || hasImportedClipSources() || state.playing || (state.rapidFrameNavigation && !rollingReversePrefetch) || state.view !== 'review') return;
   state.videoPrefetchTimer = setTimeout(() => {
     state.videoPrefetchTimer = null;
     const queuedOrigin = state.videoPrefetchQueuedOrigin;
@@ -1677,7 +1928,11 @@ function setFrame(index, { fromHeldNavigation = false } = {}) {
       renderHeatmapFrameOnly();
     }
   }
-  if (state.view === 'report') updateReportTimebars(null, { syncSelection: true });
+  if (state.view === 'report') {
+    const previousReportClipId = state.report.selectedClipId;
+    updateReportTimebars(null, { syncSelection: true });
+    if (state.report.selectedClipId !== previousReportClipId) renderReportPreview();
+  }
   scheduleRecoveryCursor();
   return frameReady;
 }
@@ -1861,8 +2116,17 @@ function renderFrameBoxes() {
         node.append(resizeHandle);
       });
     }
-    node.addEventListener('pointerdown', (event) => startMoveGesture(event, index));
-    node.addEventListener('click', (event) => { event.stopPropagation(); if (state.annotationTool === 'select') selectDetection(index); });
+    node.addEventListener('pointerdown', (event) => {
+      if (state.annotationTool === 'select') {
+        startMoveGesture(event, index);
+      } else if (state.annotationTool === 'draw') {
+        // Existing boxes take precedence over drawing so a click can always select one.
+        event.preventDefault();
+        event.stopPropagation();
+        selectDetection(index);
+      }
+    });
+    node.addEventListener('click', (event) => { event.stopPropagation(); selectDetection(index); });
     layer.append(node);
   });
 }
@@ -1895,11 +2159,12 @@ function startCanvasGesture(event) {
     state.selectedDetection = null;
     renderFrameBoxes();
     renderInspector();
-    return;
   }
   event.preventDefault();
   const point = pointToPixels(event);
-  state.gesture = { mode: state.annotationTool, pointerId: event.pointerId, start: point, previewBox: [point.x, point.y, point.x, point.y] };
+  const mode = state.annotationTool === 'erase' ? 'erase' : 'draw';
+  state.showBoxes = true;
+  state.gesture = { mode, pointerId: event.pointerId, start: point, previewBox: [point.x, point.y, point.x, point.y] };
   $('#frame-stage').setPointerCapture?.(event.pointerId);
   renderGesturePreview();
 }
@@ -1977,6 +2242,7 @@ function renderAnnotationTools() {
     button.setAttribute('aria-pressed', String(active));
   });
   const stage = $('#frame-stage');
+  stage.classList.toggle('direct-draw-active', state.annotationTool === 'select');
   stage.classList.toggle('draw-active', state.annotationTool === 'draw');
   stage.classList.toggle('erase-active', state.annotationTool === 'erase');
 }
@@ -2152,8 +2418,10 @@ function togglePlayback() { state.playing ? stopPlayback() : startPlayback(); }
 function renderFrame() {
   const frame = currentFrame(); if (!frame) return;
   const image = $('#frame-image'); const video = $('#frame-video'); const canvas = $('#frame-canvas');
+  const frameVideoSource = videoSourceForFrame(frame);
+  const frameHasVideo = Boolean(state.videoFile && (frameVideoSource || (!hasImportedClipSources() && !hasMultipleVideoSources())));
   let frameReady = null;
-  if (state.videoFile) {
+  if (frameHasVideo) {
     image.style.display = 'none';
     video.style.display = 'block';
     video.style.opacity = state.videoDisplayedTime == null ? '0' : video.style.opacity;
@@ -2167,7 +2435,7 @@ function renderFrame() {
     state.videoTargetTime = null;
     setVideoSeeking(false);
   }
-  $('#stage-empty').hidden = Boolean(state.videoFile || state.sourceJsonName === 'demo-labels.json');
+  $('#stage-empty').hidden = Boolean(frameHasVideo || state.sourceJsonName === 'demo-labels.json');
   $('#frame-index-label').textContent = `FRAME ${String(frame.sample_index).padStart(4, '0')}`;
   $('#frame-time-label').textContent = `Clip ${(frame.clip_index ?? 0) + 1} / ${formatTime(frameClipTime(frame))}`;
   $('#current-frame-count').textContent = `${state.frameIndex + 1} / ${state.doc.frames.length}`;
@@ -2266,6 +2534,8 @@ function clipSelectionIsAdjacent(indexes) {
 
 function updateClipSelectionUi() {
   const clips = state.doc?.clips || [];
+  const importedSources = hasImportedClipSources();
+  if (importedSources) state.clipSelection.clear();
   [...state.clipSelection].forEach((index) => {
     if (!Number.isInteger(index) || index < 0 || index >= clips.length) state.clipSelection.delete(index);
   });
@@ -2280,9 +2550,11 @@ function updateClipSelectionUi() {
   });
   const button = $('#merge-clips-button');
   if (!button) return;
-  const canMerge = selected.length >= 2 && clipSelectionIsAdjacent(selected);
+  const canMerge = !importedSources && selected.length >= 2 && clipSelectionIsAdjacent(selected);
   button.disabled = !canMerge;
-  const label = canMerge
+  const label = importedSources
+    ? 'Imported source clips cannot be merged'
+    : canMerge
     ? `Merge ${selected.length} selected clips`
     : selected.length === 1
       ? 'Select a neighboring clip to merge'
@@ -2344,7 +2616,7 @@ function nearestFrameIndexAtTimeline(time, clip = null) {
 
 function updateVideoTimebar(timeOverride = null) {
   const slider = $('#video-time-slider');
-  const duration = Math.max(0, state.videoFile ? Number($('#frame-video')?.duration || 0) : durationSec());
+  const duration = Math.max(0, state.videoFile && canUseGlobalVideoCache() ? Number($('#frame-video')?.duration || 0) : durationSec());
   if (!slider || !duration) {
     updateClipTimebar();
     return;
@@ -2474,12 +2746,14 @@ function renderClipSidebar(listSelector = '#clip-list', countSelector = '#clip-c
   const list = $(listSelector);
   if (!list) return;
   const clips = state.doc?.clips || [];
+  const importedSources = hasImportedClipSources();
   const count = $(countSelector);
   if (count) count.textContent = clips.length;
   const signature = clips.map((clip) => [
     clip.id,
     clip.start_sec,
     clip.end_sec,
+    importedSources,
     state.clipThumbnails.has(clipThumbnailKey(clip, 'start')),
     state.clipThumbnails.has(clipThumbnailKey(clip, 'end')),
   ].join(':')).join('|');
@@ -2507,8 +2781,9 @@ function renderClipSidebar(listSelector = '#clip-list', countSelector = '#clip-c
     selection.type = 'checkbox';
     selection.className = 'clip-select-checkbox';
     selection.checked = state.clipSelection.has(index);
+    selection.disabled = importedSources;
     selection.setAttribute('aria-label', `Select ${clip.name || `Clip ${index + 1}`} for merging`);
-    selection.title = 'Select clip for merging';
+    selection.title = importedSources ? 'Imported source clips cannot be merged' : 'Select clip for merging';
     selection.addEventListener('change', () => toggleClipSelection(index, selection.checked));
     const title = document.createElement('span');
     title.className = 'clip-row-title';
@@ -2531,7 +2806,7 @@ function renderClipSidebar(listSelector = '#clip-list', countSelector = '#clip-c
     start.value = formatClipClock(clip.start_sec);
     start.inputMode = 'text';
     start.setAttribute('aria-label', `${clip.name || `Clip ${index + 1}`} start time`);
-    start.readOnly = index === 0;
+    start.readOnly = importedSources || index === 0;
     const arrow = document.createElement('span');
     arrow.className = 'icon';
     arrow.innerHTML = icon('chevron-right');
@@ -2541,7 +2816,7 @@ function renderClipSidebar(listSelector = '#clip-list', countSelector = '#clip-c
     end.value = formatClipClock(clip.end_sec);
     end.inputMode = 'text';
     end.setAttribute('aria-label', `${clip.name || `Clip ${index + 1}`} end time`);
-    end.readOnly = index === clips.length - 1;
+    end.readOnly = importedSources || index === clips.length - 1;
     const wireTimeInput = (input, edge) => {
       const original = input.value;
       let committing = false;
@@ -2638,24 +2913,41 @@ async function captureClipThumbnail(video, time, { signal } = {}) {
 }
 
 async function prepareClipThumbnails() {
-  if (!state.videoUrl || !state.doc?.clips?.length || state.clipThumbnailPreparing) return;
+  if (!(state.videoSources?.length || state.videoUrl) || !state.doc?.clips?.length || state.clipThumbnailPreparing) return;
   const token = ++state.clipThumbnailToken;
   const controller = new AbortController();
   state.clipThumbnailAbortController = controller;
   state.clipThumbnailPreparing = true;
-  const sourceVideo = document.createElement('video');
-  sourceVideo.preload = 'metadata';
-  sourceVideo.muted = true;
-  sourceVideo.playsInline = true;
-  sourceVideo.src = state.videoUrl;
+  const sourceVideos = new Map();
+  const getSourceVideo = async (clip) => {
+    const sourceIndex = videoSourceIndexForClip(clip);
+    const source = sourceIndex == null
+      ? (hasImportedClipSources() ? null : state.videoSources[0])
+      : state.videoSources[sourceIndex];
+    if (!source?.url) return null;
+    if (sourceVideos.has(source.index)) return sourceVideos.get(source.index);
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+    video.src = source.url;
+    video.load();
+    await waitForVideoMetadata(video);
+    sourceVideos.set(source.index, video);
+    return video;
+  };
 
   try {
-    sourceVideo.load();
-    await waitForVideoMetadata(sourceVideo);
     const sourceFps = Math.max(1, Number(state.doc.sampling?.source_fps) || 25);
     for (const clip of state.doc.clips) {
-      const endTime = Math.max(clip.start_sec, clip.end_sec - 1 / sourceFps);
-      for (const [edge, time] of [['start', clip.start_sec], ['end', endTime]]) {
+      const sourceVideo = await getSourceVideo(clip);
+      if (!sourceVideo) continue;
+      const clipLength = Math.max(0, Number(clip.end_sec) - Number(clip.start_sec));
+      const endTime = Math.max(0, clipLength - 1 / sourceFps);
+      const localTimes = usesLocalVideoTimeForClip(clip);
+      const startTime = localTimes ? 0 : Number(clip.start_sec) || 0;
+      const finishTime = localTimes ? endTime : Math.max(startTime, Number(clip.end_sec) - 1 / sourceFps);
+      for (const [edge, time] of [['start', startTime], ['end', finishTime]]) {
         if (token !== state.clipThumbnailToken || controller.signal.aborted) return;
         const key = clipThumbnailKey(clip, edge);
         if (state.clipThumbnails.has(key)) continue;
@@ -2673,8 +2965,7 @@ async function prepareClipThumbnails() {
   } catch (error) {
     if (token === state.clipThumbnailToken && !controller.signal.aborted) console.warn('Clip thumbnails could not be prepared', error);
   } finally {
-    sourceVideo.removeAttribute('src');
-    sourceVideo.load();
+    sourceVideos.forEach((sourceVideo) => { sourceVideo.removeAttribute('src'); sourceVideo.load(); });
     if (state.clipThumbnailAbortController === controller) state.clipThumbnailAbortController = null;
     if (token === state.clipThumbnailToken) state.clipThumbnailPreparing = false;
   }
@@ -2780,7 +3071,7 @@ function detectTimestampGapCuts(signatures, factor = 2.5) {
 function updateClipDetectionUi() {
   const button = $('[data-action="detect-clips"]');
   if (button) {
-    button.disabled = !state.videoUrl && !state.clipDetectionRunning;
+    button.disabled = (hasImportedClipSources() || !state.videoUrl) && !state.clipDetectionRunning;
     button.setAttribute('aria-busy', String(state.clipDetectionRunning));
     button.setAttribute('aria-label', state.clipDetectionRunning ? 'Cancel clip detection' : 'Detect video clips');
     button.dataset.tooltip = state.clipDetectionRunning ? 'Cancel clip detection' : 'Detect video clips';
@@ -2804,6 +3095,7 @@ function clipDetectionWorkerCount(duration, hardwareConcurrency = globalThis.nav
 
 async function detectVideoClips() {
   if (state.clipDetectionRunning) return cancelClipDetection();
+  if (hasImportedClipSources()) return showToast('Imported files already define the clip boundaries', 'error');
   if (!state.videoUrl) return showToast('Load an MP4 before detecting clips', 'error');
   const detectionStartedAt = performance.now();
   let detectionCompleted = false;
@@ -3008,7 +3300,7 @@ function renderInspector() {
     if (!frame.detections.length) {
       const empty = document.createElement('div');
       empty.className = 'box-list-empty';
-      empty.innerHTML = `<span class="icon">${icon('scan')}</span><strong>No boxes on this frame</strong><span>Choose Add box, then drag on the image.</span>`;
+      empty.innerHTML = `<span class="icon">${icon('scan')}</span><strong>No boxes on this frame</strong><span>Drag on the image to add a box, or use Add box for guided drawing.</span>`;
       list.append(empty);
     } else frame.detections.forEach((detection, index) => {
       const row = document.createElement('button'); row.type = 'button'; row.className = `detection-row${state.selectedDetection === index ? ' selected' : ''}`; row.setAttribute('aria-pressed', String(state.selectedDetection === index)); row.addEventListener('click', () => selectDetection(index));
@@ -3103,12 +3395,12 @@ function heatmapAggregateForClip(clip) {
     framesWithBoxes.add(frame.sample_index ?? frameIndex);
     const centerX = ((x1 + x2) * 0.5 / videoWidth()) * columns;
     const centerY = ((y1 + y2) * 0.5 / videoHeight()) * rows;
-    const radiusX = Math.max(1.2, ((x2 - x1) / videoWidth()) * columns * 0.58);
-    const radiusY = Math.max(1.2, ((y2 - y1) / videoHeight()) * rows * 0.58);
-    const minCol = Math.max(0, Math.floor(centerX - radiusX * 2.4));
-    const maxCol = Math.min(columns - 1, Math.ceil(centerX + radiusX * 2.4));
-    const minRow = Math.max(0, Math.floor(centerY - radiusY * 2.4));
-    const maxRow = Math.min(rows - 1, Math.ceil(centerY + radiusY * 2.4));
+    const radiusX = Math.max(1.05, ((x2 - x1) / videoWidth()) * columns * 0.48);
+    const radiusY = Math.max(1.05, ((y2 - y1) / videoHeight()) * rows * 0.48);
+    const minCol = Math.max(0, Math.floor(centerX - radiusX * 2.15));
+    const maxCol = Math.min(columns - 1, Math.ceil(centerX + radiusX * 2.15));
+    const minRow = Math.max(0, Math.floor(centerY - radiusY * 2.15));
+    const maxRow = Math.min(rows - 1, Math.ceil(centerY + radiusY * 2.15));
     const confidence = Math.max(0.2, Math.min(1, Number(detection.confidence) || 1));
     const weight = 0.35 + confidence * 0.65;
     for (let row = minRow; row <= maxRow; row += 1) {
@@ -3116,8 +3408,8 @@ function heatmapAggregateForClip(clip) {
         const dx = (col + 0.5 - centerX) / radiusX;
         const dy = (row + 0.5 - centerY) / radiusY;
         const distance = dx * dx + dy * dy;
-        if (distance > 5.8) continue;
-        const contribution = weight * Math.exp(-distance * 0.72);
+        if (distance > 4.8) continue;
+        const contribution = weight * Math.exp(-distance * 0.92);
         const index = row * columns + col;
         values[index] += contribution;
         if (values[index] > peak) peak = values[index];
@@ -3233,7 +3525,7 @@ function drawHeatmapOverlay(aggregate) {
 function updateHeatmapTimebars(timeOverride = null) {
   const frame = currentFrame();
   const video = $('#frame-video');
-  const duration = Math.max(0, Number(video?.duration) || durationSec());
+  const duration = Math.max(0, canUseGlobalVideoCache() ? Number(video?.duration) || durationSec() : durationSec());
   const timeline = Math.max(0, Math.min(duration || durationSec(), Number(timeOverride ?? frameTimeline(frame)) || 0));
   const globalSlider = $('#heatmap-video-time-slider');
   if (globalSlider) {
@@ -3400,7 +3692,9 @@ function deleteSelectedRows() {
 function reportDurationSec() {
   const frames = state.doc?.frames || [];
   const frameEnd = frames.length ? frameTimeline(frames[frames.length - 1]) : 0;
-  const attachedDuration = state.videoFile ? Number($('#frame-video')?.duration || 0) : 0;
+  const attachedDuration = state.videoFile && !hasMultipleVideoSources() && !hasImportedClipSources()
+    ? Number($('#frame-video')?.duration || 0)
+    : 0;
   if (Number.isFinite(attachedDuration) && attachedDuration > 0) return attachedDuration;
   if (state.sourceJsonName === 'demo-labels.json') return frameEnd;
   const declared = Number(state.doc?.video?.source_duration_sec || 0);
@@ -3417,6 +3711,7 @@ function parseClipTime(value) {
 }
 
 function openClipDialog() {
+  if (hasImportedClipSources()) return showToast('Imported files already define the clip boundaries', 'error');
   const input = $('#clip-cuts-input');
   if (!input) return;
   input.value = (state.doc?.clips || []).slice(1).map((clip) => formatClipClock(clip.start_sec)).join(', ');
@@ -3436,7 +3731,7 @@ function persistClipSplices(clips) {
 }
 
 function applyDocumentClips(clips, { source = 'manual', persist = true, dirty = true, message = '' } = {}) {
-  if (!state.doc || !clips?.length) return false;
+  if (!state.doc || !clips?.length || hasImportedClipSources()) return false;
   state.doc.clips = clips.map((clip, index) => ({
     ...clip,
     id: `clip-${index + 1}`,
@@ -3458,6 +3753,7 @@ function applyDocumentClips(clips, { source = 'manual', persist = true, dirty = 
 }
 
 function commitClipBoundary(clipIndex, edge, value, input) {
+  if (hasImportedClipSources()) return false;
   const clips = state.doc?.clips || [];
   const duration = Math.max(0, reportDurationSec());
   const update = clipBoundaryUpdate(clips, duration, clipIndex, edge, value);
@@ -3504,6 +3800,7 @@ function mergeAdjacentClipRanges(clips, selectedIndexes, duration) {
 }
 
 function mergeSelectedClips() {
+  if (hasImportedClipSources()) return showToast('Imported files already define the clip boundaries', 'error');
   const clips = state.doc?.clips || [];
   const selected = sortedClipSelection();
   const duration = Math.max(0, reportDurationSec());
@@ -3520,6 +3817,7 @@ function mergeSelectedClips() {
 }
 
 function addDocumentClip() {
+  if (hasImportedClipSources()) return showToast('Imported files already define the clip boundaries', 'error');
   const duration = Math.max(0, reportDurationSec());
   const existing = state.doc?.clips || [];
   if (!state.doc || !duration) return showToast('Load a playable video before adding a clip', 'error');
@@ -3542,6 +3840,7 @@ function addDocumentClip() {
 }
 
 function applyDocumentClipCuts(value) {
+  if (hasImportedClipSources()) return false;
   if (!state.doc) return false;
   const duration = Math.max(0, reportDurationSec());
   const tokens = String(value || '').split(',').map((token) => token.trim()).filter(Boolean);
@@ -3558,6 +3857,14 @@ function applyDocumentClipCuts(value) {
   return true;
 }
 
+function resetReportMedia({ clearHeatmapSelections = false } = {}) {
+  state.report.captures = [];
+  state.report.baseImages = {};
+  state.report.heatmapImages = {};
+  state.report.heatmapCaptureToken = (state.report.heatmapCaptureToken || 0) + 1;
+  if (clearHeatmapSelections) state.report.heatmapFrameSelections = {};
+}
+
 function resetReportClips() {
   const duration = reportDurationSec();
   const source = (state.doc?.clips || []).map((clip, index) => ({ ...clip, id: `clip-${index + 1}`, index, name: `Clip ${index + 1}` }));
@@ -3567,13 +3874,20 @@ function resetReportClips() {
   state.report.selectedClipIds = state.report.clips.map((clip) => String(clip.id));
   state.report.batchPrint = false;
   state.report.clipCutsText = state.report.clips.slice(1).map((clip) => formatClock(clip.start_sec)).join(', ');
-  state.report.captures = [];
-  state.report.baseImages = {};
+  resetReportMedia({ clearHeatmapSelections: true });
   const input = $('#report-clip-cuts');
   if (input) input.value = state.report.clipCutsText;
 }
 
 function applyReportClipCuts(value) {
+  if (hasImportedClipSources()) {
+    const input = $('#report-clip-cuts');
+    if (input) {
+      input.value = state.report.clipCutsText || '';
+      input.classList.remove('invalid');
+    }
+    return false;
+  }
   const duration = Math.max(0, reportDurationSec());
   const tokens = String(value || '').split(',').map((token) => token.trim()).filter(Boolean);
   const parsed = tokens.map(parseClipTime);
@@ -3593,8 +3907,7 @@ function applyReportClipCuts(value) {
   state.report.selectedClipIds = preservedSelection.length ? preservedSelection : state.report.clips.map((clip) => String(clip.id));
   state.report.batchPrint = false;
   state.report.clipCutsText = String(value || '');
-  state.report.captures = [];
-  state.report.baseImages = {};
+  resetReportMedia({ clearHeatmapSelections: true });
   markDirty();
   return true;
 }
@@ -3666,6 +3979,7 @@ function setReportSelectedClip(clip, { jump = false, edge = 'start', focus = fal
     updateReportTimebars();
   }
   updateReportClipSidebarUi();
+  renderReportPreview();
   if (focus) reportFocusSection(clip);
   scheduleRecoveryCursor();
 }
@@ -3731,6 +4045,8 @@ function renderReportClipSidebar() {
     clip.end_sec,
     state.clipThumbnails.has(clipThumbnailKey(clip, 'start')),
     state.clipThumbnails.has(clipThumbnailKey(clip, 'end')),
+    reportHeatmapFrameSelectionKey(clip),
+    heatmapFramesForClip(clip).length,
     Boolean(reportBaseImage(clip)),
   ].join(':')).join('|');
   if (list.dataset.signature === signature && list.childElementCount === clips.length) {
@@ -3774,13 +4090,42 @@ function renderReportClipSidebar() {
     range.className = 'report-clip-time-range';
     range.innerHTML = `<span>${formatClipClock(clip.start_sec)}</span><span class="icon">${icon('chevron-right')}</span><span>${formatClipClock(clip.end_sec)}</span>`;
 
+    const heatmapSource = document.createElement('label');
+    heatmapSource.className = 'report-heatmap-source-field';
+    const heatmapSourceLabel = document.createElement('span');
+    heatmapSourceLabel.textContent = 'Heatmap background';
+    const heatmapSourceSelect = document.createElement('select');
+    heatmapSourceSelect.className = 'report-heatmap-source-select';
+    heatmapSourceSelect.setAttribute('aria-label', `Heatmap background for ${clip.name}`);
+    const heatmapFrames = heatmapFramesForClip(clip);
+    const selectedHeatmapFrame = reportHeatmapFrameSelection(clip);
+    heatmapFrames.forEach((frame, frameIndex) => {
+      const option = document.createElement('option');
+      option.value = reportHeatmapFrameKey(frame, frameIndex);
+      option.textContent = `Frame ${frame.sample_index ?? frameIndex} · ${formatClipClock(frameTimeline(frame))}`;
+      option.selected = frame === selectedHeatmapFrame;
+      heatmapSourceSelect.append(option);
+    });
+    heatmapSourceSelect.disabled = heatmapFrames.length === 0;
+    heatmapSource.append(heatmapSourceLabel, heatmapSourceSelect);
+
     const progress = document.createElement('div');
     progress.className = 'report-clip-progress';
     progress.append(document.createElement('span'));
     rowHeader.append(selectLabel, heading);
-    row.append(rowHeader, thumbnails, range, progress);
+    row.append(rowHeader, thumbnails, range, heatmapSource, progress);
     checkbox.addEventListener('click', (event) => event.stopPropagation());
     checkbox.addEventListener('change', (event) => toggleReportClipSelection(clip.id, event.target.checked));
+    heatmapSourceSelect.addEventListener('click', (event) => event.stopPropagation());
+    heatmapSourceSelect.addEventListener('change', (event) => {
+      const selectedFrame = heatmapFrames.find((frame, frameIndex) => reportHeatmapFrameKey(frame, frameIndex) === event.target.value);
+      if (!selectedFrame) return;
+      state.report.heatmapFrameSelections[clip.id] = event.target.value;
+      delete state.report.heatmapImages[clip.id];
+      markDirty();
+      renderReportHeatmaps();
+      void captureReportHeatmapFrame(clip, selectedFrame).then(() => renderReportHeatmaps());
+    });
     heading.addEventListener('click', (event) => {
       event.stopPropagation();
       setReportSelectedClip(clip, { focus: true });
@@ -3793,50 +4138,12 @@ function renderReportClipSidebar() {
 
 function updateReportTimebars(timeOverride = null, { syncSelection = false } = {}) {
   const clips = reportClips();
-  const duration = Math.max(0, Number($('#frame-video')?.duration) || durationSec());
+  const duration = Math.max(0, canUseGlobalVideoCache() ? Number($('#frame-video')?.duration) || durationSec() : durationSec());
   const timeline = Math.max(0, Math.min(duration || durationSec(), Number(timeOverride ?? frameTimeline(currentFrame())) || 0));
   if (syncSelection) {
     const containing = clips.find((clip, index) => timeline >= Number(clip.start_sec) - 0.0001 && (timeline < Number(clip.end_sec) || index === clips.length - 1));
     if (containing) state.report.selectedClipId = containing.id;
   }
-  const clip = reportSelectedClip();
-  const step = reviewSampleStep();
-  const videoSlider = $('#report-video-time-slider');
-  if (videoSlider) {
-    videoSlider.disabled = duration <= 0;
-    videoSlider.min = '0';
-    videoSlider.max = String(Math.max(0.001, duration));
-    videoSlider.step = String(step);
-    videoSlider.value = String(timeline);
-    videoSlider.style.setProperty('--timebar-progress', `${duration ? timeline / duration * 100 : 0}%`);
-    videoSlider.setAttribute('aria-valuetext', `${formatClipClock(timeline)} of ${formatClipClock(duration)}`);
-  }
-  const videoCurrent = $('#report-video-time-current');
-  const videoEnd = $('#report-video-time-end');
-  if (videoCurrent) videoCurrent.textContent = formatClipClock(timeline);
-  if (videoEnd) videoEnd.textContent = formatClipClock(duration);
-
-  const position = clip ? clipTimebarPosition(clip, timeline) : { current: 0, duration: 0 };
-  const clipSlider = $('#report-clip-time-slider');
-  if (clipSlider) {
-    clipSlider.disabled = !clip || position.duration <= 0;
-    clipSlider.min = '0';
-    clipSlider.max = String(Math.max(0.001, position.duration));
-    clipSlider.step = String(step);
-    clipSlider.value = String(position.current);
-    clipSlider.style.setProperty('--timebar-progress', `${position.duration ? position.current / position.duration * 100 : 0}%`);
-    clipSlider.setAttribute('aria-valuetext', `${formatTime(position.current)} of ${formatTime(position.duration)} in ${clip?.name || 'clip'}`);
-  }
-  const clipLabel = $('#report-clip-time-label');
-  const clipCurrent = $('#report-clip-time-current');
-  const clipEnd = $('#report-clip-time-end');
-  const title = $('#report-active-clip-title');
-  const note = $('#report-clip-time-note');
-  if (clipLabel) clipLabel.textContent = clip?.name || 'Clip';
-  if (clipCurrent) clipCurrent.textContent = formatTime(position.current);
-  if (clipEnd) clipEnd.textContent = formatTime(position.duration);
-  if (title) title.textContent = `${clip?.name || 'Clip'} report`;
-  if (note) note.textContent = clip ? `${clip.name}: ${formatClipClock(clip.start_sec)} to ${formatClipClock(clip.end_sec)}. Click either image to jump to its source frame.` : 'No report clip available.';
   updateReportClipSidebarUi(timeline);
 }
 
@@ -3874,8 +4181,72 @@ function nearestFrameInClip(clip, localTime, tolerance = Infinity) {
   return nearestFrameAtTimeline(clip.start_sec + localTime, tolerance, clip);
 }
 
+function reportHeatmapFrameKey(frame, index = 0) {
+  return String(frame?.sample_index ?? frame?.source_frame_index ?? index);
+}
+
+function reportHeatmapFrameSelection(clip) {
+  const frames = heatmapFramesForClip(clip);
+  if (!frames.length) return null;
+  const stored = state.report.heatmapFrameSelections?.[clip.id];
+  const storedIndex = frames.findIndex((frame, index) => reportHeatmapFrameKey(frame, index) === String(stored));
+  if (storedIndex >= 0) return frames[storedIndex];
+  const detectionIndex = frames.findIndex((frame) => Array.isArray(frame.detections) && frame.detections.length > 0);
+  return frames[detectionIndex >= 0 ? detectionIndex : Math.floor(frames.length / 2)] || frames[0];
+}
+
+function reportHeatmapFrameSelectionKey(clip) {
+  const frames = heatmapFramesForClip(clip);
+  const selected = reportHeatmapFrameSelection(clip);
+  const index = selected ? frames.indexOf(selected) : -1;
+  return selected ? reportHeatmapFrameKey(selected, Math.max(0, index)) : '';
+}
+
 function reportBaseImage(clip) {
   return state.report.baseImages[clip.id] || (state.sourceJsonName === 'demo-labels.json' ? './public/demo-frame.jpg' : '');
+}
+
+function reportHeatmapImage(clip) {
+  return state.report.heatmapImages[clip.id] || reportBaseImage(clip);
+}
+
+async function captureReportHeatmapFrame(clip, frame = reportHeatmapFrameSelection(clip)) {
+  if (!clip || !frame) return '';
+  const frameIndex = heatmapFramesForClip(clip).indexOf(frame);
+  const frameKey = reportHeatmapFrameKey(frame, Math.max(0, frameIndex));
+  const token = ++state.report.heatmapCaptureToken;
+  let source = '';
+  let sourceVideo = null;
+  try {
+    const clipSourceIndex = videoSourceIndexForClip(clip);
+    const sourceDescriptor = videoSourceForFrame(frame)
+      || (clipSourceIndex == null
+        ? (hasImportedClipSources() ? null : state.videoSources[0])
+        : state.videoSources[clipSourceIndex]);
+    const fallbackUrl = hasImportedClipSources() ? '' : state.videoUrl;
+    if (sourceDescriptor?.url || fallbackUrl) {
+      sourceVideo = document.createElement('video');
+      sourceVideo.muted = true;
+      sourceVideo.playsInline = true;
+      sourceVideo.preload = 'metadata';
+      sourceVideo.src = sourceDescriptor?.url || fallbackUrl;
+      await waitForVideoMetadata(sourceVideo);
+      source = await captureVideoFrame(sourceVideo, usesLocalVideoTimeForFrame(frame) ? frameClipTime(frame) : frameTimeline(frame));
+    }
+  } catch (error) {
+    console.warn(error);
+  } finally {
+    sourceVideo?.pause();
+    sourceVideo?.removeAttribute('src');
+    sourceVideo?.load();
+  }
+  if (!source) source = reportBaseImage(clip);
+  if (token !== state.report.heatmapCaptureToken) return '';
+  if (source) {
+    state.report.heatmapImages[clip.id] = source;
+    state.report.heatmapFrameSelections[clip.id] = frameKey;
+  }
+  return source;
 }
 
 function formatReportDate(value) {
@@ -3957,6 +4328,10 @@ function renderReportControls() {
   $$('[data-compliance]').forEach((input) => { input.checked = Boolean(state.report.compliance[input.dataset.compliance]); });
   const clips = reportClips();
   const clipInput = $('#report-clip-cuts');
+  const importedSources = hasImportedClipSources();
+  clipInput.disabled = importedSources;
+  clipInput.readOnly = importedSources;
+  clipInput.title = importedSources ? 'Imported source clips define these boundaries' : '';
   if (document.activeElement !== clipInput) clipInput.value = state.report.clipCutsText;
   const summary = $('#report-clip-summary');
   summary.textContent = `${clips.length} ${clips.length === 1 ? 'clip' : 'clips'} / ${Math.max(0, clips.length - 1)} ${clips.length === 2 ? 'cut' : 'cuts'}`;
@@ -3968,7 +4343,9 @@ function renderReportIdentity() {
   $$('[data-report-date]').forEach((node) => { node.textContent = formatReportDate(state.report.demonstrationDate); });
   $$('[data-page-tenderer]').forEach((node) => { node.textContent = state.report.tenderer.trim() || 'Not entered'; });
   $$('[data-page-date]').forEach((node) => { node.textContent = formatReportDate(state.report.demonstrationDate); });
-  $('#report-source-value').textContent = state.sourceJsonName || state.videoFile?.name || 'Not entered';
+  $('#report-source-value').textContent = state.sourceJsonNames?.length > 1
+    ? `${state.sourceJsonNames.length} JSON files`
+    : state.sourceJsonName || state.videoFile?.name || 'Not entered';
   const frames = state.doc?.frames || [];
   const first = frameTimeline(frames[0]);
   const last = frameTimeline(frames[frames.length - 1]);
@@ -4054,7 +4431,9 @@ function renderReportSummaryPages() {
   if (!root) return;
   root.replaceChildren();
   const clips = reportPreviewClips();
-  const sourceName = state.sourceJsonName || state.videoFile?.name || 'Not entered';
+  const sourceName = state.sourceJsonNames?.length > 1
+    ? `${state.sourceJsonNames.length} JSON files`
+    : state.sourceJsonName || state.videoFile?.name || 'Not entered';
 
   clips.forEach((clip) => {
     const countPage = document.createElement('section');
@@ -4066,11 +4445,11 @@ function renderReportSummaryPages() {
       <div class="report-reference">Sampled every 2 minutes within this clip</div>
       <div class="report-meta-grid report-meta-compact"><span>Clip coverage</span><strong data-summary-range></strong><span>Source label file</span><strong data-summary-source></strong></div>
       <h3>Detection count by time point</h3>
-      <table class="report-table report-count-table"><thead><tr><th>Time in clip</th><th>Source frame</th><th>Detections</th></tr></thead><tbody></tbody></table>
+      <table class="report-table report-count-table"><thead><tr><th>Time in clip</th><th>Detections</th></tr></thead><tbody></tbody></table>
       <p class="report-note" data-summary-note></p>`;
     countPage.querySelector('[data-summary-clip]').textContent = `${clip.name} / ${formatClipClock(clip.start_sec)}-${formatClipClock(clip.end_sec)}`;
     countPage.querySelector('[data-summary-range]').textContent = `${formatClipClock(clip.start_sec)} to ${formatClipClock(clip.end_sec)}`;
-    countPage.querySelector('[data-summary-source]').textContent = sourceName;
+    countPage.querySelector('[data-summary-source]').textContent = clip.source_json || sourceName;
     const countBody = countPage.querySelector('tbody');
     let missing = 0;
     const points = clipTimepoints(clip, 120);
@@ -4080,11 +4459,9 @@ function renderReportSummaryPages() {
       const row = document.createElement('tr');
       const timeCell = document.createElement('td');
       timeCell.textContent = formatClock(time);
-      const frameCell = document.createElement('td');
-      frameCell.textContent = frame ? String(frame.sample_index ?? '-') : '-';
       const countCell = document.createElement('td');
       countCell.textContent = frame ? String(frame.detections.length) : '-';
-      row.append(timeCell, frameCell, countCell);
+      row.append(timeCell, countCell);
       countBody.append(row);
     });
     countPage.querySelector('[data-summary-note]').textContent = missing ? `${missing} of ${points.length} time points had no matching sampled label frame.` : `${points.length} time points matched sampled label frames. This page belongs only to ${clip.name}.`;
@@ -4097,6 +4474,10 @@ function interpolateColor(left, right, amount) {
 }
 
 function reportHeatColor(value) {
+  return `rgb(${reportHeatRgb(value).join(', ')})`;
+}
+
+function reportHeatRgb(value) {
   const stops = [
     [0, [21, 31, 122]],
     [0.18, [0, 91, 211]],
@@ -4110,8 +4491,31 @@ function reportHeatColor(value) {
   const upperIndex = Math.max(1, stops.findIndex(([point]) => point >= t));
   const [leftPoint, left] = stops[upperIndex - 1];
   const [rightPoint, right] = stops[upperIndex];
-  const rgb = interpolateColor(left, right, (t - leftPoint) / Math.max(0.001, rightPoint - leftPoint));
-  return `rgb(${rgb.join(', ')})`;
+  return interpolateColor(left, right, (t - leftPoint) / Math.max(0.001, rightPoint - leftPoint));
+}
+
+function smoothReportHeatmapCells(cells, columns, rows) {
+  const smoothed = new Float32Array(cells.length);
+  const kernel = [1, 2, 1];
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      let total = 0;
+      let weight = 0;
+      for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+        const sourceRow = row + offsetY;
+        if (sourceRow < 0 || sourceRow >= rows) continue;
+        for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+          const sourceColumn = column + offsetX;
+          if (sourceColumn < 0 || sourceColumn >= columns) continue;
+          const sampleWeight = kernel[offsetX + 1] * kernel[offsetY + 1];
+          total += (cells[sourceRow * columns + sourceColumn] || 0) * sampleWeight;
+          weight += sampleWeight;
+        }
+      }
+      smoothed[row * columns + column] = weight ? total / weight : 0;
+    }
+  }
+  return smoothed;
 }
 
 function rasterizeReportHeatmap(clip, columns = 48, rows = 36) {
@@ -4127,30 +4531,57 @@ function rasterizeReportHeatmap(clip, columns = 48, rows = 36) {
   const cells = new Float32Array(columns * rows);
   if (aggregate?.values?.length) {
     for (let row = 0; row < rows; row += 1) {
-      const sourceTop = Math.floor(row * aggregate.rows / rows);
-      const sourceBottom = Math.max(sourceTop + 1, Math.ceil((row + 1) * aggregate.rows / rows));
+      const sourceTop = row * aggregate.rows / rows;
+      const sourceBottom = (row + 1) * aggregate.rows / rows;
       for (let column = 0; column < columns; column += 1) {
-        const sourceLeft = Math.floor(column * aggregate.columns / columns);
-        const sourceRight = Math.max(sourceLeft + 1, Math.ceil((column + 1) * aggregate.columns / columns));
-        let value = 0;
-        for (let sourceRow = sourceTop; sourceRow < sourceBottom; sourceRow += 1) {
-          for (let sourceColumn = sourceLeft; sourceColumn < sourceRight; sourceColumn += 1) {
-            value = Math.max(value, aggregate.values[sourceRow * aggregate.columns + sourceColumn] || 0);
+        const sourceLeft = column * aggregate.columns / columns;
+        const sourceRight = (column + 1) * aggregate.columns / columns;
+        let total = 0;
+        let totalWeight = 0;
+        for (let sourceRow = Math.floor(sourceTop); sourceRow < Math.ceil(sourceBottom); sourceRow += 1) {
+          const rowWeight = Math.max(0, Math.min(sourceBottom, sourceRow + 1) - Math.max(sourceTop, sourceRow));
+          for (let sourceColumn = Math.floor(sourceLeft); sourceColumn < Math.ceil(sourceRight); sourceColumn += 1) {
+            const columnWeight = Math.max(0, Math.min(sourceRight, sourceColumn + 1) - Math.max(sourceLeft, sourceColumn));
+            const sampleWeight = rowWeight * columnWeight;
+            total += (aggregate.values[sourceRow * aggregate.columns + sourceColumn] || 0) * sampleWeight;
+            totalWeight += sampleWeight;
           }
         }
-        cells[row * columns + column] = value;
+        cells[row * columns + column] = totalWeight ? total / totalWeight : 0;
       }
     }
   }
+  const smoothedCells = smoothReportHeatmapCells(cells, columns, rows);
   return {
-    cells,
+    cells: smoothedCells,
     columns,
     rows,
-    peak: Math.max(0, ...cells),
+    peak: Math.max(0, ...smoothedCells),
     matchedSamples: aggregate?.frameCount || 0,
     confirmedSamples: aggregate?.framesWithBoxes || 0,
     detectionCount: aggregate?.boxCount || 0,
   };
+}
+
+function drawReportHeatmapCanvas(canvas, heatmap) {
+  canvas.width = heatmap.columns;
+  canvas.height = heatmap.rows;
+  const context = canvas.getContext('2d');
+  if (!context) return;
+  context.clearRect(0, 0, heatmap.columns, heatmap.rows);
+  if (heatmap.peak <= 0) return;
+  const pixels = context.createImageData(heatmap.columns, heatmap.rows);
+  heatmap.cells.forEach((value, index) => {
+    if (value <= 0) return;
+    const strength = Math.max(0, Math.min(1, value / heatmap.peak));
+    const [red, green, blue] = reportHeatRgb(strength);
+    const offset = index * 4;
+    pixels.data[offset] = red;
+    pixels.data[offset + 1] = green;
+    pixels.data[offset + 2] = blue;
+    pixels.data[offset + 3] = Math.round(20 + strength * 205);
+  });
+  context.putImageData(pixels, 0, 0);
 }
 
 function renderReportHeatmaps() {
@@ -4180,7 +4611,7 @@ function renderReportHeatmaps() {
       </div>
       <div class="report-heatmap-band"><strong>Heat map</strong><span><b data-heatmap-clip></b> / <i data-heatmap-range></i></span></div>
       <div class="report-heatmap-frame">
-        <div class="report-heatmap-plot"><img alt="Grayscale thermal image used for the activity heat map" /><div class="report-heatmap-cells" aria-hidden="true"></div><div class="report-media-empty" hidden></div></div>
+        <div class="report-heatmap-plot"><img alt="Grayscale thermal image used for the activity heat map" /><canvas class="report-heatmap-canvas" aria-hidden="true"></canvas><div class="report-media-empty" hidden></div></div>
       </div>
       <p class="report-note report-heatmap-note"></p>`;
     section.querySelector('[data-heatmap-clip]').textContent = clip.name;
@@ -4188,33 +4619,22 @@ function renderReportHeatmaps() {
     section.querySelector('[data-page-tenderer]').textContent = state.report.tenderer.trim() || 'Not entered';
     section.querySelector('[data-page-date]').textContent = formatReportDate(state.report.demonstrationDate);
     const image = section.querySelector('img');
-    const baseImage = reportBaseImage(clip);
+    const baseImage = reportHeatmapImage(clip);
     image.hidden = !baseImage;
     if (baseImage) image.src = baseImage;
     const frame = section.querySelector('.report-heatmap-frame');
     frame.classList.toggle('no-source', !baseImage);
-    const overlay = section.querySelector('.report-heatmap-cells');
-    if (heatmap.peak > 0) {
-      heatmap.cells.forEach((value, index) => {
-        if (value <= 0) return;
-        const cell = document.createElement('span');
-        const column = index % heatmap.columns;
-        const row = Math.floor(index / heatmap.columns);
-        const strength = value / heatmap.peak;
-        cell.className = 'report-heat-cell';
-        cell.style.left = `${column / heatmap.columns * 100}%`;
-        cell.style.top = `${row / heatmap.rows * 100}%`;
-        cell.style.width = `${100 / heatmap.columns + 0.08}%`;
-        cell.style.height = `${100 / heatmap.rows + 0.08}%`;
-        cell.style.backgroundColor = reportHeatColor(strength);
-        cell.style.opacity = String(0.58 + strength * 0.34);
-        overlay.append(cell);
-      });
-    }
+    const overlay = section.querySelector('.report-heatmap-canvas');
+    overlay.hidden = heatmap.peak <= 0;
+    drawReportHeatmapCanvas(overlay, heatmap);
     const empty = section.querySelector('.report-media-empty');
     empty.hidden = heatmap.detectionCount > 0;
     empty.textContent = baseImage ? 'No rodent detections in this clip' : 'Source video not attached';
-    section.querySelector('.report-heatmap-note').textContent = `${heatmap.matchedSamples.toLocaleString()} sampled frames in this clip; ${heatmap.confirmedSamples.toLocaleString()} frames with detections and ${heatmap.detectionCount.toLocaleString()} rodent boxes contributed to this clip-wide heat map.`;
+    const backgroundFrame = reportHeatmapFrameSelection(clip);
+    const backgroundNote = backgroundFrame
+      ? ` Background: frame ${backgroundFrame.sample_index ?? '-'} at ${formatClipClock(frameTimeline(backgroundFrame))}.`
+      : '';
+    section.querySelector('.report-heatmap-note').textContent = `${heatmap.matchedSamples.toLocaleString()} sampled frames in this clip; ${heatmap.confirmedSamples.toLocaleString()} frames with detections and ${heatmap.detectionCount.toLocaleString()} rodent boxes contributed to this clip-wide heat map.${backgroundNote}`;
     root.append(section);
   });
 }
@@ -4279,16 +4699,20 @@ function renderReportCaptures() {
   }
 }
 
-function renderReport() {
-  renderReportControls();
-  renderReportClipSidebar();
-  renderReportMetrics();
-  renderReportCompliance();
+function renderReportPreview() {
   renderReportCountLog();
   renderReportSummaryPages();
   renderReportHeatmaps();
   renderReportCaptures();
   renderReportIdentity();
+}
+
+function renderReport() {
+  renderReportControls();
+  renderReportClipSidebar();
+  renderReportMetrics();
+  renderReportCompliance();
+  renderReportPreview();
   updateReportTimebars();
 }
 
@@ -4386,20 +4810,25 @@ async function prepareReportMedia({ silent = false } = {}) {
       button.setAttribute('aria-busy', 'true');
       if (button.lastElementChild) button.lastElementChild.textContent = 'Preparing...';
     }
-    let sourceVideo = null;
-    if (state.videoUrl) {
+    const sourceVideos = new Map();
+    const getSourceVideo = async (source) => {
+      if (!source?.url) return null;
+      if (sourceVideos.has(source.index)) return sourceVideos.get(source.index);
       try {
-        sourceVideo = document.createElement('video');
+        const sourceVideo = document.createElement('video');
         sourceVideo.muted = true;
         sourceVideo.playsInline = true;
         sourceVideo.preload = 'metadata';
-        sourceVideo.src = state.videoUrl;
+        sourceVideo.src = source.url;
         await waitForVideoMetadata(sourceVideo);
+        sourceVideos.set(source.index, sourceVideo);
+        return sourceVideo;
       } catch (error) {
         console.warn(error);
-        sourceVideo = null;
+        return null;
       }
-    }
+    };
+    const singleSource = state.videoSources?.[0] || (state.videoUrl ? { index: 0, url: state.videoUrl } : null);
 
     const fallback = state.sourceJsonName === 'demo-labels.json' ? './public/demo-frame.jpg' : '';
     const captures = [];
@@ -4409,9 +4838,14 @@ async function prepareReportMedia({ silent = false } = {}) {
         const timelineTime = clip.start_sec + time;
         let src = fallback;
         let videoCaptured = false;
+        const clipSourceIndex = videoSourceIndexForClip(clip);
+        const clipSource = clipSourceIndex == null
+          ? (hasImportedClipSources() ? null : singleSource)
+          : state.videoSources[clipSourceIndex];
+        const sourceVideo = await getSourceVideo(clipSource);
         if (sourceVideo) {
           try {
-            const captured = await captureVideoFrame(sourceVideo, timelineTime);
+            const captured = await captureVideoFrame(sourceVideo, usesLocalVideoTimeForClip(clip) ? time : timelineTime);
             if (captured) { src = captured; videoCaptured = true; }
           } catch (error) {
             console.warn(error);
@@ -4423,7 +4857,14 @@ async function prepareReportMedia({ silent = false } = {}) {
     }
     state.report.captures = captures;
     state.report.baseImages = baseImages;
+    state.report.heatmapImages = {};
+    state.report.heatmapCaptureToken += 1;
     renderReport();
+    for (const clip of reportPreviewClips()) {
+      await captureReportHeatmapFrame(clip, reportHeatmapFrameSelection(clip));
+    }
+    sourceVideos.forEach((video) => { video.pause(); video.removeAttribute('src'); video.load(); });
+    renderReportHeatmaps();
     if (!silent) showToast('Tender report preview refreshed', 'success');
   })();
   try {
@@ -4471,25 +4912,27 @@ async function printReportBatch() {
 function renderImportStatus() {
   const jsonButton = $('#json-import-button');
   const videoButton = $('#video-import-button');
-  const jsonReady = Boolean(state.doc && state.sourceJsonName && state.sourceJsonName !== 'demo-labels.json');
-  const videoReady = Boolean(state.videoFile);
+  const jsonCount = (state.sourceJsonNames || []).filter((name) => name && name !== 'demo-labels.json').length;
+  const videoCount = (state.videoSources || []).length || (state.videoFile ? 1 : 0);
+  const jsonReady = Boolean(state.doc && (jsonCount || (state.sourceJsonName && state.sourceJsonName !== 'demo-labels.json')));
+  const videoReady = videoCount > 0;
   jsonButton?.classList.toggle('is-loaded', jsonReady);
   videoButton?.classList.toggle('is-loaded', videoReady);
   if (jsonButton) {
-    jsonButton.querySelector('[data-import-label]').textContent = jsonReady ? 'JSON loaded' : 'Open JSON';
-    jsonButton.title = jsonReady ? `Label JSON loaded: ${state.sourceJsonName}` : 'Choose label JSON';
-    jsonButton.setAttribute('aria-label', jsonReady ? `Replace label JSON, current file ${state.sourceJsonName}` : 'Choose label JSON');
+    jsonButton.querySelector('[data-import-label]').textContent = jsonReady ? `${jsonCount || 1} JSON loaded` : 'Open JSON files';
+    jsonButton.title = jsonReady ? `Label JSON files loaded: ${(state.sourceJsonNames || [state.sourceJsonName]).join(', ')}` : 'Choose one or more label JSON files';
+    jsonButton.setAttribute('aria-label', jsonReady ? `Replace ${jsonCount || 1} label JSON files` : 'Choose one or more label JSON files');
   }
   if (videoButton) {
-    videoButton.querySelector('[data-import-label]').textContent = videoReady ? 'Video loaded' : 'Open video';
-    videoButton.title = videoReady ? `Source video loaded: ${state.videoFile.name}` : 'Choose source video MP4, MOV, or WebM';
-    videoButton.setAttribute('aria-label', videoReady ? `Replace source video, current file ${state.videoFile.name}` : 'Choose source video MP4, MOV, or WebM');
+    videoButton.querySelector('[data-import-label]').textContent = videoReady ? `${videoCount} video${videoCount === 1 ? '' : 's'} loaded` : 'Open videos';
+    videoButton.title = videoReady ? `Source videos loaded: ${(state.videoSources || [{ name: state.videoFile?.name }]).map((source) => source.name).filter(Boolean).join(', ')}` : 'Choose one or more source videos';
+    videoButton.setAttribute('aria-label', videoReady ? `Replace ${videoCount} source videos` : 'Choose one or more source videos');
   }
 }
 
 function importReadinessText() {
   if (state.dirty) return state.recoverySavedRevision >= state.recoveryRevision ? 'Autosaved in browser' : 'Autosaving...';
-  const jsonReady = Boolean(state.doc && state.sourceJsonName && state.sourceJsonName !== 'demo-labels.json');
+  const jsonReady = Boolean(state.doc && ((state.sourceJsonNames || []).length || (state.sourceJsonName && state.sourceJsonName !== 'demo-labels.json')));
   if (!state.videoFile) return state.recoveryRestored ? 'Video needs reload' : jsonReady ? 'Label JSON loaded' : 'Demo loaded';
   if (!videoMatchesDocument()) return 'Check source video';
   return jsonReady ? 'Files ready' : 'Video ready';
@@ -4498,12 +4941,13 @@ function importReadinessText() {
 function renderDocumentInfo() {
   if (!state.doc) return;
   const videoTitle = (state.videoFile?.name || state.recoveryVideo?.name || 'Video review').replace(/\.[^.]+$/, '');
-  const title = state.sourceJsonName === 'demo-labels.json' ? 'Demo frame slice' : state.sourceJsonName ? state.sourceJsonName.replace(/\.json$/i, '') : videoTitle;
-  const mediaStatus = state.videoFile ? `video ${formatClipClock(reportDurationSec())}` : state.recoveryVideo?.name ? 'video needs reload' : 'video not loaded';
+  const title = state.sourceJsonName === 'demo-labels.json' ? 'Demo frame slice' : (state.sourceJsonNames?.length > 1 ? `${state.sourceJsonNames.length} label files` : state.sourceJsonName ? state.sourceJsonName.replace(/\.json$/i, '') : videoTitle);
+  const videoCount = (state.videoSources || []).length || (state.videoFile ? 1 : 0);
+  const mediaStatus = videoCount ? `${videoCount} video${videoCount === 1 ? '' : 's'} / ${formatClipClock(reportDurationSec())}` : state.recoveryVideo?.name ? 'video needs reload' : 'video not loaded';
   $('#document-title').textContent = title;
   $('#document-subtitle').textContent = `${state.doc.schema || 'label document'} / ${state.doc.frames.length.toLocaleString()} review samples / 1 frame per 10 sec / ${mediaStatus}`;
   const hasReview = state.doc.frames.some((frame) => frame.review_status !== 'unreviewed');
-  $('#document-status').textContent = hasReview ? 'REVIEW COPY' : !state.sourceJsonName && state.videoFile ? 'VIDEO ONLY' : 'MACHINE GENERATED';
+  $('#document-status').textContent = hasReview ? 'REVIEW COPY' : !state.sourceJsonNames?.length && state.videoFile ? 'VIDEO ONLY' : 'MACHINE GENERATED';
 }
 
 function renderView() {
@@ -4550,7 +4994,7 @@ function saveJson() {
     ...(state.doc.review || {}),
     tool: 'Thermal Audit Desk',
     schema_version: 1,
-    source_label_file: state.sourceJsonName,
+    source_label_file: state.sourceJsonNames?.length > 1 ? state.sourceJsonNames : state.sourceJsonName,
     started_at_utc: state.doc.review?.started_at_utc || new Date().toISOString(),
     updated_at_utc: new Date().toISOString(),
     reviewed_frame_count: state.doc.frames.filter((frame) => frame.review_status !== 'unreviewed').length,
@@ -4559,7 +5003,9 @@ function saveJson() {
   const blob = new Blob([payload], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
-  const sourceName = state.sourceJsonName || state.videoFile?.name || 'thermal-audit';
+  const sourceName = state.sourceJsonNames?.length > 1
+    ? 'thermal-audit'
+    : state.sourceJsonName || state.videoFile?.name || 'thermal-audit';
   const baseName = sourceName.replace(/_reviewed(?=\.json$)/i, '').replace(/\.[^.]+$/i, '');
   anchor.href = url;
   anchor.download = `${baseName}_reviewed.json`;
@@ -4573,8 +5019,94 @@ function saveJson() {
   showToast('Reviewed JSON downloaded', 'success');
 }
 
+function isVideoFile(file) {
+  return Boolean(file && (file.type?.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/i.test(file.name || '')));
+}
+
+async function handleMultipleFiles(files) {
+  const selectedVideos = files.filter(isVideoFile);
+  const selectedJsons = files.filter((file) => /\.json$/i.test(file.name || '') || file.type === 'application/json');
+  // The UI has separate file pickers. Retain the other input kind so users can
+  // choose a batch of videos and then choose the matching batch of JSON files.
+  const videos = selectedVideos.length ? selectedVideos : (state.videoFiles || []);
+  const jsons = selectedJsons.length ? selectedJsons : (state.jsonFiles || []);
+  if (!videos.length && !jsons.length) return showToast('Choose label JSON or video files', 'error');
+  const importStartedAt = performance.now();
+  const pairs = buildImportPairs(videos, jsons);
+  $('#save-state').textContent = `Reading ${jsons.length} JSON / ${videos.length} videos`;
+  let sources = [];
+  try {
+    sources = await Promise.all(videos.map((file, index) => inspectVideoSource(file, index)));
+    const entries = [];
+    for (const pair of pairs) {
+      const source = pair.videoIndex == null ? null : sources[pair.videoIndex];
+      let doc;
+      if (pair.json) {
+        const raw = JSON.parse(await pair.json.text());
+        doc = normalizeDocument(raw);
+        if (!doc.frames.length && !source) throw new Error(`${pair.json.name} contains no frames`);
+      } else if (source) {
+        doc = createVideoOnlyDocument(source.file, source.duration, source.width, source.height);
+      }
+      if (!doc) continue;
+      entries.push({ doc, video: source, videoIndex: pair.videoIndex, jsonIndex: pair.jsonIndex, jsonName: pair.json?.name || '' });
+    }
+    const merged = mergeImportedDocuments(entries);
+    if (!merged?.frames?.length) throw new Error('The selected files produced no review frames');
+    detachVideo();
+    state.doc = merged;
+    state.jsonFiles = [...jsons];
+    state.sourceJsonNames = jsons.map((file) => file.name);
+    state.sourceJsonName = jsons.length === 1 ? jsons[0].name : jsons.length ? `${jsons.length} JSON files` : '';
+    state.frameIndex = Math.max(0, state.doc.frames.findIndex((frame) => frame.detections.length));
+    state.selectedDetection = state.doc.frames[state.frameIndex]?.detections.length ? 0 : null;
+    state.annotationTool = 'select';
+    state.history = [];
+    state.future = [];
+    state.tableSelection.clear();
+    state.windows = [];
+    state.selectedWindow = null;
+    state.dirty = false;
+    state.recoveryRestored = false;
+    resetBatchErase(activeClip());
+    resetClipThumbnails();
+    resetReportClips();
+    buildWindows();
+    const videoReady = sources.length ? await attachVideoSources(sources) : false;
+    renderAll();
+    document.body.dataset.importMs = String(Math.max(0, Math.round(performance.now() - importStartedAt)));
+    document.body.dataset.importKind = 'multi-input';
+    document.body.dataset.importResult = videoReady || !videos.length ? 'complete' : 'failed';
+    scheduleRecoveryCheckpoint({ immediate: true });
+    if (videoReady) {
+      const frameReady = syncVideoToFrame($('#frame-video'), currentFrame());
+      void frameReady?.then((ready) => { if (ready) scheduleClipThumbnails(); });
+    }
+    const sourceLabel = `${entries.length} clip${entries.length === 1 ? '' : 's'}`;
+    if (videos.length && !videoReady) {
+      showToast(`${sourceLabel} created, but one or more videos could not be loaded`, 'error');
+    } else {
+      showToast(`${sourceLabel} created from ${videos.length} video${videos.length === 1 ? '' : 's'} and ${jsons.length} JSON file${jsons.length === 1 ? '' : 's'}`, 'success');
+    }
+  } catch (error) {
+    console.error(error);
+    sources.forEach((source) => source.url && URL.revokeObjectURL(source.url));
+    document.body.dataset.importMs = String(Math.max(0, Math.round(performance.now() - importStartedAt)));
+    document.body.dataset.importKind = 'multi-input';
+    document.body.dataset.importResult = 'failed';
+    $('#save-state').textContent = 'Import failed';
+    showToast('One or more selected files could not be read', 'error');
+  }
+}
+
 async function handleFiles(fileList) {
-  const files = [...fileList]; const json = files.find((file) => file.name.toLowerCase().endsWith('.json')); const video = files.find((file) => file.type.startsWith('video/') || /\.(mp4|mov|webm|m4v)$/i.test(file.name));
+  const files = [...fileList];
+  const jsonFiles = files.filter((file) => file.name.toLowerCase().endsWith('.json') || file.type === 'application/json');
+  const videoFiles = files.filter(isVideoFile);
+  const retainedMultiInput = (state.jsonFiles?.length > 1 || state.videoFiles?.length > 1 || state.doc?.video?.sources?.length > 1);
+  if (jsonFiles.length > 1 || videoFiles.length > 1 || (jsonFiles.length && videoFiles.length && files.length > 2)
+    || (retainedMultiInput && (jsonFiles.length || videoFiles.length))) return handleMultipleFiles(files);
+  const json = jsonFiles[0]; const video = videoFiles[0];
   if (!json && !video) return showToast('Choose a label JSON or video file', 'error');
   const preserveRecoveredReport = Boolean(video && !json && state.recoveryRestored);
   const importStartedAt = performance.now();
@@ -4586,6 +5118,8 @@ async function handleFiles(fileList) {
       state.doc = normalizeDocument(raw);
       if (!state.doc.frames.length) throw new Error('Label JSON contains no frames');
       state.sourceJsonName = json.name;
+      state.sourceJsonNames = [json.name];
+      state.jsonFiles = [json];
       state.recoveryRestored = false;
       state.recoveryVideo = null;
       state.frameIndex = Math.max(0, state.doc.frames.findIndex((frame) => frame.detections.length));
@@ -4706,26 +5240,98 @@ function detachVideo() {
   video?.pause();
   video?.removeAttribute('src');
   video?.load();
-  if (state.videoUrl) URL.revokeObjectURL(state.videoUrl);
+  const urls = new Set([state.videoUrl, ...(state.videoSources || []).map((source) => source.url)]);
+  urls.forEach((url) => { if (url) URL.revokeObjectURL(url); });
   state.videoFile = null;
   state.videoUrl = '';
+  state.videoFiles = [];
+  state.videoSources = [];
+  state.activeVideoSourceIndex = null;
   state.recoveryVideo = null;
-  state.report.captures = [];
-  state.report.baseImages = {};
+  state.recoveryVideos = [];
+  resetReportMedia();
   clearVideoCanvas();
   setVideoSeeking(false);
+}
+
+async function inspectVideoSource(file, index) {
+  const url = URL.createObjectURL(file);
+  const probe = document.createElement('video');
+  probe.preload = 'metadata';
+  probe.muted = true;
+  probe.playsInline = true;
+  probe.src = url;
+  try {
+    probe.load();
+    await waitForVideoMetadata(probe);
+    return { index, file, url, name: file.name, duration: Number(probe.duration) || 0, width: probe.videoWidth || 0, height: probe.videoHeight || 0 };
+  } catch (error) {
+    URL.revokeObjectURL(url);
+    throw error;
+  } finally {
+    probe.removeAttribute('src');
+    probe.load();
+  }
+}
+
+async function attachVideoSources(sources, { preserveReport = false } = {}) {
+  detachVideo();
+  state.videoSources = sources.map((source, index) => ({ ...source, index }));
+  state.videoFiles = state.videoSources.map((source) => source.file).filter(Boolean);
+  state.activeVideoSourceIndex = state.videoSources.length ? 0 : null;
+  const active = state.videoSources[0];
+  if (!active) return false;
+  state.videoFile = active.file;
+  state.videoUrl = active.url;
+  state.recoveryVideos = recoveryVideoMetadataList();
+  state.recoveryVideo = state.recoveryVideos[0] || null;
+  state.videoAttachmentToken += 1;
+  state.videoTargetTime = null;
+  state.videoDisplayedTime = null;
+  state.videoRequestedTime = null;
+  resetReportMedia();
+  setVideoSeeking(true);
+  const video = $('#frame-video');
+  const canvas = $('#frame-canvas');
+  $('#frame-image').style.display = 'none';
+  video.style.display = 'block';
+  canvas.hidden = false;
+  $('#stage-empty').hidden = true;
+  video.src = state.videoUrl;
+  video.load();
+  try {
+    await waitForVideoMetadata(video);
+    if (Number.isFinite(video.duration) && video.duration > 0) {
+      active.duration = Number(video.duration);
+      active.width = video.videoWidth || active.width;
+      active.height = video.videoHeight || active.height;
+    }
+    state.videoFrameCacheLimit = frameCacheLimitForSize(video.videoWidth, video.videoHeight);
+    if (!preserveReport || !state.report.clips.length) resetReportClips();
+    else resetReportMedia();
+    state.recoveryRestored = false;
+    buildWindows();
+    return true;
+  } catch (error) {
+    console.error(error);
+    detachVideo();
+    showVideoError('Video could not be decoded');
+    return false;
+  }
 }
 
 async function attachVideo(file, { createVideoDocument = false, preserveReport = false } = {}) {
   detachVideo();
   state.videoFile = file;
   state.videoUrl = URL.createObjectURL(file);
+  state.videoFiles = [file];
+  state.videoSources = [{ index: 0, file, url: state.videoUrl, name: file.name, duration: 0, width: 0, height: 0 }];
+  state.activeVideoSourceIndex = 0;
   const attachmentToken = ++state.videoAttachmentToken;
   state.videoTargetTime = null;
   state.videoDisplayedTime = null;
   state.videoRequestedTime = null;
-  state.report.captures = [];
-  state.report.baseImages = {};
+  resetReportMedia();
   setVideoSeeking(true);
   const video = $('#frame-video');
   const canvas = $('#frame-canvas');
@@ -4739,10 +5345,15 @@ async function attachVideo(file, { createVideoDocument = false, preserveReport =
     await waitForVideoMetadata(video);
     if (attachmentToken !== state.videoAttachmentToken) return false;
     const duration = Number(video.duration);
+    state.videoSources[0].duration = duration;
+    state.videoSources[0].width = video.videoWidth;
+    state.videoSources[0].height = video.videoHeight;
     state.videoFrameCacheLimit = frameCacheLimitForSize(video.videoWidth, video.videoHeight);
     if (createVideoDocument) {
       state.doc = createVideoOnlyDocument(file, duration, video.videoWidth, video.videoHeight);
       state.sourceJsonName = '';
+      state.sourceJsonNames = [];
+      state.jsonFiles = [];
       state.frameIndex = 0;
       state.selectedDetection = null;
       state.annotationTool = 'select';
@@ -4765,10 +5376,10 @@ async function attachVideo(file, { createVideoDocument = false, preserveReport =
       lastModified: Number(file.lastModified) || 0,
       duration: Number(duration) || 0,
     };
+    state.recoveryVideos = recoveryVideoMetadataList();
     if (!preserveReport || !state.report.clips.length) resetReportClips();
     else {
-      state.report.captures = [];
-      state.report.baseImages = {};
+      resetReportMedia();
     }
     state.recoveryRestored = false;
     buildWindows();
@@ -4834,12 +5445,11 @@ function bindEvents() {
     else if (action === 'print-report') void printReport();
     else if (action === 'print-report-batch') void printReportBatch();
     else if (action === 'select-all-report-clips') selectAllReportClips();
-    else if (action === 'focus-report-clip') reportFocusSection();
     else if (action === 'show-shortcuts') openShortcuts();
     else if (action === 'close-shortcuts') closeShortcuts();
   }));
-  $('#json-input').addEventListener('change', async (event) => { const files = [...(event.target.files || [])]; event.target.value = ''; await handleFiles(files); });
-  $('#video-input')?.addEventListener('change', async (event) => { const video = event.target.files?.[0]; event.target.value = ''; if (video) await handleFiles([video]); });
+  $('#json-input').addEventListener('change', async (event) => { const files = [...(event.target.files || [])]; event.target.value = ''; if (files.length) await handleFiles(files); });
+  $('#video-input')?.addEventListener('change', async (event) => { const files = [...(event.target.files || [])]; event.target.value = ''; if (files.length) await handleFiles(files); });
   const frameVideo = $('#frame-video');
   frameVideo.addEventListener('loadedmetadata', () => {
     const frameReady = renderFrame();
@@ -4936,48 +5546,6 @@ function bindEvents() {
     state.clipTimeScrubTimer = setTimeout(() => commitHeatmapClipTime(localTime, clip), 55);
   });
   heatmapClipTimeSlider?.addEventListener('change', (event) => commitHeatmapClipTime(event.target.value));
-  const reportVideoTimeSlider = $('#report-video-time-slider');
-  const commitReportVideoTime = (value) => {
-    const time = Math.max(0, Number(value) || 0);
-    clearTimeout(state.videoTimeScrubTimer);
-    clearTimeout(state.clipTimeScrubTimer);
-    state.videoTimeScrubTimer = null;
-    state.clipTimeScrubTimer = null;
-    const index = nearestFrameIndexAtTimeline(time);
-    if (index >= 0) setFrame(index);
-  };
-  reportVideoTimeSlider?.addEventListener('input', (event) => {
-    const time = Number(event.target.value) || 0;
-    updateReportTimebars(time, { syncSelection: true });
-    clearTimeout(state.clipTimeScrubTimer);
-    clearTimeout(state.videoTimeScrubTimer);
-    state.videoTimeScrubTimer = setTimeout(() => commitReportVideoTime(time), 55);
-  });
-  reportVideoTimeSlider?.addEventListener('change', (event) => commitReportVideoTime(event.target.value));
-  const reportClipTimeSlider = $('#report-clip-time-slider');
-  const commitReportClipTime = (value, clip = reportSelectedClip()) => {
-    if (!clip) return;
-    const start = Math.max(0, Number(clip.start_sec) || 0);
-    const target = clipTimebarPosition(clip, start + Math.max(0, Number(value) || 0)).timeline;
-    clearTimeout(state.clipTimeScrubTimer);
-    clearTimeout(state.videoTimeScrubTimer);
-    state.clipTimeScrubTimer = null;
-    state.videoTimeScrubTimer = null;
-    const index = nearestFrameIndexAtTimeline(target);
-    if (index >= 0) setFrame(index);
-  };
-  reportClipTimeSlider?.addEventListener('input', (event) => {
-    const clip = reportSelectedClip();
-    if (!clip) return;
-    const start = Math.max(0, Number(clip.start_sec) || 0);
-    const localTime = Math.max(0, Number(event.target.value) || 0);
-    const target = clipTimebarPosition(clip, start + localTime).timeline;
-    updateReportTimebars(target);
-    clearTimeout(state.videoTimeScrubTimer);
-    clearTimeout(state.clipTimeScrubTimer);
-    state.clipTimeScrubTimer = setTimeout(() => commitReportClipTime(localTime, clip), 55);
-  });
-  reportClipTimeSlider?.addEventListener('change', (event) => commitReportClipTime(event.target.value));
   ['start', 'end'].forEach((bound) => {
     const slider = $(`#batch-erase-${bound}-slider`);
     const input = $(`#batch-erase-${bound}-time`);
@@ -5018,8 +5586,12 @@ function handleKeydown(event) {
   if (!$('#clip-dialog').hidden) { if (event.key === 'Escape') closeClipDialog(); return; }
   if (!$('#shortcut-dialog').hidden) { if (event.key === 'Escape') closeShortcuts(); return; }
   if (event.ctrlKey && event.key.toLowerCase() === 'z') { event.preventDefault(); return undo(); } if (event.ctrlKey && event.key.toLowerCase() === 'y') { event.preventDefault(); return redo(); } if (event.ctrlKey && event.key.toLowerCase() === 's') { event.preventDefault(); return saveJson(); }
-  const target = event.target; const typing = target.matches?.('input, textarea, select, button'); if (event.key === '?' && !typing) return openShortcuts(); if (typing) return;
-  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); startFrameKeyNavigation(event); } else if (event.key === 'ArrowUp' || event.key === 'w') { event.preventDefault(); selectDetection((state.selectedDetection ?? 0) - 1); } else if (event.key === 'ArrowDown' || event.key === 's') { event.preventDefault(); selectDetection((state.selectedDetection ?? -1) + 1); } else if (event.key === 'Enter') { event.preventDefault(); markFrame('accepted', true); } else if (event.key === 'Delete') { event.preventDefault(); deleteSelectedBox(); } else if (event.key === ' ') { event.preventDefault(); togglePlayback(); } else if (event.key.toLowerCase() === 'b') { toggleBoxes(); } else if (event.key.toLowerCase() === 'f') { toggleFlag(); } else if (event.key === 'Escape') { state.annotationTool = 'select'; state.gesture = null; renderAll(); }
+  const target = event.target;
+  const typing = target.matches?.('input, textarea, select');
+  if ((event.key === 'Delete' || event.key === 'Backspace') && !typing) { event.preventDefault(); return deleteSelectedBox(); }
+  if (event.key === '?' && !typing) return openShortcuts();
+  if (typing) return;
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); startFrameKeyNavigation(event); } else if (event.key === 'ArrowUp' || event.key === 'w') { event.preventDefault(); selectDetection((state.selectedDetection ?? 0) - 1); } else if (event.key === 'ArrowDown' || event.key === 's') { event.preventDefault(); selectDetection((state.selectedDetection ?? -1) + 1); } else if (event.key === 'Enter') { event.preventDefault(); markFrame('accepted', true); } else if (event.key === ' ') { event.preventDefault(); togglePlayback(); } else if (event.key.toLowerCase() === 'b') { toggleBoxes(); } else if (event.key.toLowerCase() === 'f') { toggleFlag(); } else if (event.key === 'Escape') { state.annotationTool = 'select'; state.gesture = null; renderAll(); }
 }
 
 async function boot() {

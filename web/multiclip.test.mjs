@@ -14,9 +14,9 @@ const context = vm.createContext({
   requestAnimationFrame: (callback) => setTimeout(callback, 0),
 });
 
-vm.runInContext(`${source}\n;globalThis.auditTest = { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, reviewSampleStep, sampleReviewFrames, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches };`, context);
+vm.runInContext(`${source}\n;globalThis.auditTest = { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, buildImportPairs, mergeImportedDocuments, reviewSampleStep, sampleReviewFrames, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches, videoSourceIndexForFrame, usesLocalVideoTimeForFrame, videoTimeForFrame, canUseGlobalVideoCache };`, context);
 
-const { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, reviewSampleStep, sampleReviewFrames, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches } = context.auditTest;
+const { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, buildImportPairs, mergeImportedDocuments, reviewSampleStep, sampleReviewFrames, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches, videoSourceIndexForFrame, usesLocalVideoTimeForFrame, videoTimeForFrame, canUseGlobalVideoCache } = context.auditTest;
 assert.equal(reviewSampleStep(), 10);
 const frames = [0, 10, 20, 30, 40, 50].map((timestamp, index) => ({
   sample_index: index,
@@ -45,6 +45,8 @@ state.report.clips = state.doc.clips;
 state.report.tenderer = 'Recovery test tenderer';
 state.report.captures = [{ dataUrl: 'large-generated-image' }];
 state.report.baseImages = { 'clip-1': 'large-generated-image' };
+state.report.heatmapFrameSelections = { 'clip-1': '2' };
+state.report.heatmapImages = { 'clip-1': 'large-generated-heatmap-background' };
 state.recoveryVideo = { name: 'inspection.mp4', duration: 60 };
 const recoverySnapshot = createRecoverySnapshot('2026-08-17T12:00:00.000Z');
 assert.equal(recoverySnapshot.savedAt, '2026-08-17T12:00:00.000Z');
@@ -52,9 +54,13 @@ assert.equal(recoverySnapshot.report.tenderer, 'Recovery test tenderer');
 assert.equal(recoverySnapshot.video.name, 'inspection.mp4');
 assert.equal(recoverySnapshot.report.captures, undefined, 'Generated report images must not enter browser recovery storage');
 assert.equal(recoverySnapshot.report.baseImages, undefined, 'Generated base images must not enter browser recovery storage');
+assert.equal(recoverySnapshot.report.heatmapFrameSelections['clip-1'], '2', 'Manual heatmap frame selections must survive recovery');
+assert.equal(recoverySnapshot.report.heatmapImages, undefined, 'Generated heatmap backgrounds must not enter browser recovery storage');
 state.report.tenderer = '';
 state.report.captures = [];
 state.report.baseImages = {};
+state.report.heatmapFrameSelections = {};
+state.report.heatmapImages = {};
 state.recoveryVideo = null;
 
 assert.equal(boxesIntersect([10, 10, 40, 40], [30, 30, 60, 60]), true, 'Area delete must include overlapping boxes');
@@ -120,13 +126,24 @@ assert.deepEqual(missingIds, [], `Missing HTML ids referenced by app.js: ${missi
 assert.match(html, /id="report-clip-cuts"/);
 assert.match(html, /id="report-heatmap-pages"/);
 assert.match(html, /id="report-clip-list"/);
-assert.match(html, /id="report-clip-time-slider"/);
-assert.match(html, /id="report-video-time-slider"/);
+assert.doesNotMatch(html, /report-clip-inspector|report-clip-time-slider|report-video-time-slider/, 'The redundant report clip inspector must stay removed');
+assert.match(source, /report-heatmap-source-select/, 'Every report clip must expose a heatmap background selector');
+assert.match(source, /report-heatmap-canvas/, 'Report heatmaps must render into a canvas overlay');
+assert.doesNotMatch(source, /report-heatmap-cells|report-heat-cell/, 'Report heatmaps must not regress to tiled DOM cells');
 assert.doesNotMatch(source, /report-summary-sheet/, 'The standalone clip summary page must stay removed');
 assert.match(source, /report-count-sheet/, 'Per-clip count reports must remain available');
+assert.match(source, /<th>Time in clip<\/th><th>Detections<\/th>/, 'Per-clip count reports must keep only time and detections');
+assert.doesNotMatch(source, /<th>Source frame<\/th>/, 'Per-clip count reports must not expose a Source frame column');
+assert.match(source, /function renderReportPreview\(\)/, 'Report preview sections must have a shared refresh path');
+assert.match(source, /state\.report\.selectedClipId = clip\.id;[\s\S]*?renderReportPreview\(\);/, 'Selecting a report clip must refresh its preview');
+assert.match(source, /const mode = state\.annotationTool === 'erase' \? 'erase' : 'draw';/, 'Empty review-stage drags must create boxes in Select mode');
+assert.match(source, /event\.stopPropagation\(\); selectDetection\(index\);/, 'Clicking a review box must select it');
+assert.match(source, /if \(\(event\.key === 'Delete' \|\| event\.key === 'Backspace'\) && !typing\) \{ event\.preventDefault\(\); return deleteSelectedBox\(\); \}/, 'Delete and Backspace must work when a review box button has focus');
+assert.match(source, /if \(event\.ctrlKey && event\.key\.toLowerCase\(\) === 'z'\) \{ event\.preventDefault\(\); return undo\(\); \}/, 'Ctrl+Z must prevent browser handling and call undo');
 assert.match(html, /data-action="open-json"[^>]*id="json-import-button"/);
 assert.match(html, /data-action="open-video"[^>]*id="video-import-button"/);
-assert.match(html, /id="json-input"[^>]*accept="\.json,application\/json"/);
+assert.match(html, /id="json-input"[^>]*accept="\.json,application\/json"[^>]*multiple/);
+assert.match(html, /id="video-input"[^>]*multiple/);
 assert.match(html, /id="clip-dialog"/);
 assert.match(html, /data-action="detect-clips"[^>]*id="detect-clips-button"/);
 assert.match(html, /data-action="add-clip"/);
@@ -169,6 +186,76 @@ assert.equal(videoOnlyDocument.sampling.sample_fps, 0.1);
 assert.equal(videoOnlyDocument.sampling.source_frame_stride, 250);
 assert.equal(videoOnlyDocument.video.sampled_frame_count, 8);
 assert.deepEqual(Array.from(videoOnlyDocument.clips, (clip) => [clip.start_sec, clip.end_sec, clip.source]), [[0, 75.5, 'video']], 'Video-only import must create one full-duration clip');
+
+const pairedVideos = [
+  { name: 'North Hall.mp4' },
+  { name: 'South Hall.mp4' },
+];
+const pairedJsons = [
+  { name: 'South Hall_labels.json' },
+  { name: 'North Hall_labels.json' },
+  { name: 'Unmatched_labels.json' },
+];
+const importPairs = buildImportPairs(pairedVideos, pairedJsons);
+assert.deepEqual(
+  Array.from(importPairs, (pair) => [pair.video?.name || null, pair.json?.name || null]),
+  [['North Hall.mp4', 'North Hall_labels.json'], ['South Hall.mp4', 'South Hall_labels.json'], [null, 'Unmatched_labels.json']],
+  'Multi-input imports must pair files by their normalized stems before falling back to order',
+);
+const mergedImport = mergeImportedDocuments([
+  {
+    video: { name: 'North Hall.mp4', duration: 25, width: 640, height: 480 },
+    videoIndex: 0,
+    jsonIndex: 1,
+    jsonName: 'North Hall_labels.json',
+    doc: {
+      classes: [{ id: 0, name: 'rat' }],
+      sampling: { source_fps: 25 },
+      video: { width: 640, height: 480, source_duration_sec: 25 },
+      frames: [{ sample_index: 0, timestamp_sec: 0, detections: [] }, { sample_index: 1, timestamp_sec: 10, detections: [] }],
+    },
+  },
+  {
+    video: { name: 'South Hall.mp4', duration: 15, width: 800, height: 600 },
+    videoIndex: 1,
+    jsonIndex: 0,
+    jsonName: 'South Hall_labels.json',
+    doc: {
+      classes: [{ id: 0, name: 'rat' }],
+      sampling: { source_fps: 25 },
+      video: { width: 800, height: 600, source_duration_sec: 15 },
+      frames: [{ sample_index: 0, timestamp_sec: 0, detections: [] }, { sample_index: 1, timestamp_sec: 10, detections: [] }],
+    },
+  },
+]);
+assert.deepEqual(Array.from(mergedImport.clips, (clip) => [clip.start_sec, clip.end_sec, clip.source_video_index, clip.source_json_index]), [[0, 25, 0, 1], [25, 40, 1, 0]]);
+assert.deepEqual(Array.from(mergedImport.frames, (frame) => [frame.timeline_sec, frame.clip_time_sec, frame.source_video_index]), [[0, 0, 0], [10, 10, 0], [25, 0, 1], [35, 10, 1]], 'Each imported source must retain local and global frame times');
+assert.deepEqual([mergedImport.video.width, mergedImport.video.height], [800, 600], 'Merged media dimensions must reflect the selected sources');
+const normalizedMergedImport = normalizeDocument(JSON.parse(JSON.stringify(mergedImport)));
+assert.deepEqual(Array.from(normalizedMergedImport.clips, (clip) => [clip.source_video_index, clip.source_json_index]), [[0, 1], [1, 0]], 'Source pairing metadata must survive export and recovery normalization');
+assert.deepEqual(Array.from(normalizedMergedImport.frames, (frame) => [frame.timeline_sec, frame.clip_time_sec]), [[0, 0], [10, 10], [25, 0], [35, 10]], 'Explicit merged timelines must survive a reload');
+state.doc = { clips: [{ source_video_index: null }, { source_video_index: 1 }] };
+assert.equal(videoSourceIndexForFrame({ clip_index: 0, source_video_index: null }), null, 'JSON-only clips must not coerce a missing video source to index zero');
+assert.equal(videoSourceIndexForFrame({ clip_index: 1, source_video_index: 1 }), 1);
+const mixedSourceDoc = {
+  video: { sources: [{ index: 0 }, { index: null }] },
+  clips: [{ source_video_index: 0 }, { source_video_index: null }],
+};
+const previousDoc = state.doc;
+const previousVideoSources = state.videoSources;
+state.doc = mixedSourceDoc;
+state.videoSources = [{ index: 0, duration: 60 }];
+const mixedVideoFrame = { clip_index: 0, source_video_index: 0, timeline_sec: 34, clip_time_sec: 4 };
+const mixedJsonFrame = { clip_index: 1, source_video_index: null, timeline_sec: 64, clip_time_sec: 4 };
+assert.equal(usesLocalVideoTimeForFrame(mixedVideoFrame), true, 'A video-backed clip must seek within its own source even when JSON-only clips are present');
+assert.equal(videoTimeForFrame({ duration: 60 }, mixedVideoFrame), 4, 'Mixed imports must use clip-local video time');
+assert.equal(usesLocalVideoTimeForFrame(mixedJsonFrame), false, 'A JSON-only clip must not request a video-local timestamp');
+assert.equal(canUseGlobalVideoCache(), false, 'Merged imports must not share a single-source global frame cache');
+state.doc = previousDoc;
+state.videoSources = previousVideoSources;
+assert.match(source, /const videos = selectedVideos\.length \? selectedVideos : \(state\.videoFiles \|\| \[\]\)/, 'A later JSON picker selection must reuse retained videos');
+assert.match(source, /const jsons = selectedJsons\.length \? selectedJsons : \(state\.jsonFiles \|\| \[\]\)/, 'A later video picker selection must reuse retained JSON files');
+assert.match(source, /state\.sourceJsonNames\?\.length > 1[\s\S]*?thermal-audit/, 'Merged exports must use a stable filename instead of the multi-file placeholder');
 
 const inferenceOutputDocument = normalizeDocument({
   schema: 'rodent-vision-inference/1.0',
@@ -501,6 +588,7 @@ const restored = applyRecoveryCheckpoint({
     compliance: { infrared: true },
     clips: videoOnlyDocument.clips,
     clipCutsText: '',
+    heatmapFrameSelections: { 'clip-1': '3' },
   },
 });
 assert.equal(restored, true);
@@ -511,7 +599,9 @@ assert.equal(state.showBoxes, false);
 assert.equal(state.dirty, true);
 assert.equal(state.report.tenderer, 'Recovered Tenderer');
 assert.equal(state.report.compliance.infrared, true);
+assert.equal(state.report.heatmapFrameSelections['clip-1'], '3');
 assert.deepEqual(Array.from(state.report.captures), [], 'Decoded and generated media must be rebuilt after recovery');
+assert.deepEqual(Object.keys(state.report.heatmapImages), [], 'Generated heatmap backgrounds must be rebuilt after recovery');
 assert.equal(state.recoveryVideo.name, 'inspection.mp4');
 assert.equal(state.videoFile, null, 'Recovery must never pretend the browser still has MP4 file permission');
 assert.match(recoverySourceSignature(), /restored\.json/);
