@@ -147,7 +147,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .frame-stage { position: relative; width: 100%; aspect-ratio: 4 / 3; overflow: hidden; background: #080c0d; isolation: isolate; touch-action: none; }
 .stage-grid { position: absolute; inset: 0; z-index: 1; pointer-events: none; opacity: .2; background-image: linear-gradient(rgba(173, 209, 198, .14) 1px, transparent 1px), linear-gradient(90deg, rgba(173, 209, 198, .14) 1px, transparent 1px); background-size: 8.333% 8.333%; }
 .frame-image, .frame-video, .frame-canvas { position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%; display: block; background: #080c0d; }
-.frame-image, .frame-video { object-fit: contain; }
+.frame-image, .frame-video, .frame-canvas { object-fit: contain; }
 .frame-video { opacity: 0; pointer-events: none; }
 .frame-canvas[hidden] { display: none; }
 .box-layer { position: absolute; inset: 0; z-index: 3; }
@@ -1096,7 +1096,7 @@ body * { letter-spacing: 0; }
 .report-capture { margin: 0; }
 .report-capture figcaption { margin-bottom: 6px; color: #17221c; font-size: 10px; font-weight: 750; }
 .report-capture-media { position: relative; width: min(100%, 690px); aspect-ratio: 4 / 3; overflow: hidden; margin: 0 auto; border: 1px solid #9dafa5; background: #101616; }
-.report-capture-media > img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.report-capture-media > img { width: 100%; height: 100%; display: block; object-fit: contain; }
 .report-capture-boxes { position: absolute; inset: 0; }
 .report-capture-box { position: absolute; border: 2px solid #ff604f; box-shadow: 0 0 0 1px rgba(255, 255, 255, .7); }
 .report-capture-box > span { position: absolute; top: -17px; left: -2px; min-height: 15px; display: inline-flex; align-items: center; padding: 0 4px; background: #ff604f; color: #ffffff; font-size: 7px; font-weight: 800; text-transform: uppercase; }

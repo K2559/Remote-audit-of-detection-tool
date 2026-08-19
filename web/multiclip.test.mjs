@@ -14,10 +14,35 @@ const context = vm.createContext({
   requestAnimationFrame: (callback) => setTimeout(callback, 0),
 });
 
-vm.runInContext(`${source}\n;globalThis.auditTest = { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, buildImportPairs, mergeImportedDocuments, reviewSampleStep, sampleReviewFrames, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches, videoSourceIndexForFrame, usesLocalVideoTimeForFrame, videoTimeForFrame, canUseGlobalVideoCache };`, context);
+vm.runInContext(`${source}\n;globalThis.auditTest = { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, buildImportPairs, mergeImportedDocuments, reviewSampleStep, sampleReviewFrames, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches, videoSourceIndexForFrame, usesLocalVideoTimeForFrame, videoTimeForFrame, canUseGlobalVideoCache, containedMediaRect, containedPointToPixels, containedPixelsToPercentStyle };`, context);
 
-const { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, buildImportPairs, mergeImportedDocuments, reviewSampleStep, sampleReviewFrames, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches, videoSourceIndexForFrame, usesLocalVideoTimeForFrame, videoTimeForFrame, canUseGlobalVideoCache } = context.auditTest;
+const { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, buildImportPairs, mergeImportedDocuments, reviewSampleStep, sampleReviewFrames, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches, videoSourceIndexForFrame, usesLocalVideoTimeForFrame, videoTimeForFrame, canUseGlobalVideoCache, containedMediaRect, containedPointToPixels, containedPixelsToPercentStyle } = context.auditTest;
 assert.equal(reviewSampleStep(), 10);
+const letterboxed = containedMediaRect(1200, 900, 640, 360);
+assert.ok(Math.abs(letterboxed.top - 112.5) < 0.000001, '16:9 media should be vertically letterboxed in a 4:3 stage');
+assert.equal(letterboxed.left, 0);
+assert.equal(letterboxed.width, 1200);
+assert.equal(letterboxed.height, 675);
+const pillarboxed = containedMediaRect(1200, 900, 360, 640);
+assert.ok(Math.abs(pillarboxed.left - 346.875) < 0.000001, 'portrait media should be horizontally pillarboxed');
+assert.equal(pillarboxed.top, 0);
+assert.equal(pillarboxed.width, 506.25);
+assert.equal(pillarboxed.height, 900);
+const reviewStyle = containedPixelsToPercentStyle([356, 190, 446, 262], 4, 3, 640, 360);
+assert.ok(Math.abs(parseFloat(reviewStyle.left) - 55.625) < 0.000001);
+assert.ok(Math.abs(parseFloat(reviewStyle.top) - 52.0833333333) < 0.000001);
+assert.ok(Math.abs(parseFloat(reviewStyle.width) - 14.0625) < 0.000001);
+assert.ok(Math.abs(parseFloat(reviewStyle.height) - 15) < 0.000001);
+assert.deepEqual(
+  { ...containedPointToPixels(600, 450, 1200, 900, 640, 360) },
+  { x: 320, y: 180 },
+  'Drawing in the centre of a letterboxed video should map to the source-frame centre',
+);
+assert.deepEqual(
+  { ...containedPointToPixels(0, 0, 1200, 900, 640, 360) },
+  { x: 0, y: 0 },
+  'Drawing in a letterbox band should clamp to the nearest source-frame edge',
+);
 const frames = [0, 10, 20, 30, 40, 50].map((timestamp, index) => ({
   sample_index: index,
   source_frame_index: index * 250,

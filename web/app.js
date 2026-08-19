@@ -1138,6 +1138,22 @@ function videoHeight() {
   return Math.max(1, Number(source?.height || state.doc?.video?.height || 960));
 }
 
+function containedMediaRect(containerWidth, containerHeight, contentWidth, contentHeight) {
+  const outerWidth = Math.max(1, Number(containerWidth) || 1);
+  const outerHeight = Math.max(1, Number(containerHeight) || 1);
+  const sourceWidth = Math.max(1, Number(contentWidth) || 1);
+  const sourceHeight = Math.max(1, Number(contentHeight) || 1);
+  const scale = Math.min(outerWidth / sourceWidth, outerHeight / sourceHeight);
+  const width = sourceWidth * scale;
+  const height = sourceHeight * scale;
+  return {
+    left: (outerWidth - width) / 2,
+    top: (outerHeight - height) / 2,
+    width,
+    height,
+  };
+}
+
 function hasMultipleVideoSources() {
   return Array.isArray(state.videoSources) && state.videoSources.length > 1;
 }
@@ -1503,6 +1519,11 @@ async function activateVideoSourceForFrame(video, frame) {
   video.load();
   try {
     await waitForVideoMetadata(video);
+    if (attachmentToken !== state.videoAttachmentToken) return false;
+    source.duration = Number(video.duration) || source.duration;
+    source.width = video.videoWidth || source.width;
+    source.height = video.videoHeight || source.height;
+    state.videoFrameCacheLimit = frameCacheLimitForSize(source.width, source.height);
     return attachmentToken === state.videoAttachmentToken;
   } catch (error) {
     if (attachmentToken === state.videoAttachmentToken) showVideoError('Video could not be decoded');
@@ -2055,13 +2076,40 @@ function resizeBoxFromHandle(original, handle, point, width = videoWidth(), heig
 }
 
 function pointToPixels(event) {
-  const rect = $('#frame-stage').getBoundingClientRect();
-  return { x: (event.clientX - rect.left) / rect.width * videoWidth(), y: (event.clientY - rect.top) / rect.height * videoHeight() };
+  const stage = $('#frame-stage');
+  const rect = stage.getBoundingClientRect();
+  return containedPointToPixels(event.clientX - rect.left, event.clientY - rect.top, rect.width, rect.height, videoWidth(), videoHeight());
 }
 
-function pixelsToStyle(box) {
-  const [x1, y1, x2, y2] = box;
-  return { left: `${x1 / videoWidth() * 100}%`, top: `${y1 / videoHeight() * 100}%`, width: `${(x2 - x1) / videoWidth() * 100}%`, height: `${(y2 - y1) / videoHeight() * 100}%` };
+function containedPointToPixels(x, y, containerWidth, containerHeight, sourceWidth, sourceHeight) {
+  const contentWidth = Math.max(1, Number(sourceWidth) || 1);
+  const contentHeight = Math.max(1, Number(sourceHeight) || 1);
+  const media = containedMediaRect(containerWidth, containerHeight, contentWidth, contentHeight);
+  return {
+    x: Math.max(0, Math.min(contentWidth, (Number(x) - media.left) / media.width * contentWidth)),
+    y: Math.max(0, Math.min(contentHeight, (Number(y) - media.top) / media.height * contentHeight)),
+  };
+}
+
+function containedPixelsToPercentStyle(box, containerWidth, containerHeight, sourceWidth, sourceHeight) {
+  const [x1, y1, x2, y2] = box.map(Number);
+  const outerWidth = Math.max(1, Number(containerWidth) || 1);
+  const outerHeight = Math.max(1, Number(containerHeight) || 1);
+  const contentWidth = Math.max(1, Number(sourceWidth) || 1);
+  const contentHeight = Math.max(1, Number(sourceHeight) || 1);
+  const media = containedMediaRect(outerWidth, outerHeight, contentWidth, contentHeight);
+  return {
+    left: `${(media.left + x1 / contentWidth * media.width) / outerWidth * 100}%`,
+    top: `${(media.top + y1 / contentHeight * media.height) / outerHeight * 100}%`,
+    width: `${(x2 - x1) / contentWidth * media.width / outerWidth * 100}%`,
+    height: `${(y2 - y1) / contentHeight * media.height / outerHeight * 100}%`,
+  };
+}
+
+function reviewPixelsToStyle(box) {
+  const stage = $('#frame-stage');
+  const rect = stage?.getBoundingClientRect?.();
+  return containedPixelsToPercentStyle(box, rect?.width, rect?.height, videoWidth(), videoHeight());
 }
 
 function renderEraseRegions() {
@@ -2073,7 +2121,7 @@ function renderEraseRegions() {
   state.batchErase.regions.forEach((region, index) => {
     const marker = document.createElement('span');
     marker.className = 'erase-region-marker';
-    Object.assign(marker.style, pixelsToStyle(region));
+    Object.assign(marker.style, reviewPixelsToStyle(region));
     const label = document.createElement('span');
     label.textContent = String(index + 1);
     marker.append(label);
@@ -2101,7 +2149,7 @@ function renderFrameBoxes() {
     const node = document.createElement('button');
     node.type = 'button';
     node.className = `detection-box${state.selectedDetection === index ? ' selected' : ''}${deletionTarget ? ' deletion-target' : ''}`;
-    Object.assign(node.style, pixelsToStyle(box));
+    Object.assign(node.style, reviewPixelsToStyle(box));
     node.setAttribute('aria-label', `${detection.label} detection ${index + 1}`);
     const label = document.createElement('span');
     label.className = 'box-label';
@@ -2190,7 +2238,7 @@ function renderGesturePreview() {
   if (state.gesture?.mode === 'draw' || state.gesture?.mode === 'erase') {
     cursor.hidden = false;
     cursor.classList.toggle('erase-preview', state.gesture.mode === 'erase');
-    Object.assign(cursor.style, pixelsToStyle(state.gesture.previewBox));
+    Object.assign(cursor.style, reviewPixelsToStyle(state.gesture.previewBox));
   } else cursor.hidden = true;
   renderFrameBoxes();
 }
@@ -4640,10 +4688,13 @@ function renderReportHeatmaps() {
 }
 
 function renderCaptureBoxes(container, frame) {
+  const source = videoSourceForFrame(frame);
+  const sourceWidth = Math.max(1, Number(source?.width || state.doc?.video?.width || 1280));
+  const sourceHeight = Math.max(1, Number(source?.height || state.doc?.video?.height || 960));
   (frame?.detections || []).forEach((detection) => {
     const box = document.createElement('span');
     box.className = 'report-capture-box';
-    Object.assign(box.style, pixelsToStyle(detection.bbox_xyxy_pixels));
+    Object.assign(box.style, containedPixelsToPercentStyle(detection.bbox_xyxy_pixels, 4, 3, sourceWidth, sourceHeight));
     const label = document.createElement('span');
     label.textContent = 'Rodent';
     box.append(label);
