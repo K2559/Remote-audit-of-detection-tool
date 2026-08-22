@@ -1400,8 +1400,19 @@ function isShortForwardAdvance(currentTime, targetTime, maximumSeconds = 0.65) {
   return Number.isFinite(delta) && delta > 0.001 && delta <= maximumSeconds;
 }
 
+// Fine source-frame inspection still needs the exact requested timestamp, but
+// an adjacent forward frame can be reached from the decoder's current output
+// without paying for a fresh random seek on every D keypress.
+function canUseAdjacentSourceFrameAdvance(video, targetTime) {
+  const currentTime = Number(video?.currentTime);
+  return Number.isFinite(currentTime) && isShortForwardAdvance(currentTime, targetTime);
+}
+
 function sequentialPlaybackRate(currentTime, targetTime, rapid = state.rapidFrameNavigation) {
   const delta = Math.max(0, Number(targetTime) - Number(currentTime));
+  // At source-frame granularity, a fast playback rate can jump over the
+  // requested frame before a timer callback observes the media clock.
+  if (delta > 0 && delta <= 0.08) return 1;
   const targetUpdatesPerSecond = rapid ? 30 : 15;
   return Math.max(1.5, Math.min(12, delta * targetUpdatesPerSecond));
 }
@@ -1420,12 +1431,12 @@ function playVideoForwardToTime(video, targetTime, {
   timeoutMs = state.rapidFrameNavigation ? 600 : 2500,
   playbackRate = sequentialPlaybackRate(video.currentTime, targetTime),
 } = {}) {
-  if (signal?.aborted || typeof video.requestVideoFrameCallback !== 'function'
-    || video.seeking || !isShortForwardAdvance(video.currentTime, targetTime)) return Promise.resolve(false);
+  if (signal?.aborted || video.seeking || !isShortForwardAdvance(video.currentTime, targetTime)) return Promise.resolve(false);
   return new Promise((resolve) => {
-    let callbackId = null;
+    let observerId = null;
     let timeoutId = null;
     let settled = false;
+    const usesFrameCallback = typeof video.requestVideoFrameCallback === 'function';
     const previousRate = Number(video.playbackRate) || 1;
     const previousMuted = video.muted;
     const sourceFps = Math.max(1, Number(state.doc?.sampling?.source_fps) || 25);
@@ -1433,7 +1444,10 @@ function playVideoForwardToTime(video, targetTime, {
     const cleanup = () => {
       clearTimeout(timeoutId);
       signal?.removeEventListener('abort', aborted);
-      if (callbackId != null && typeof video.cancelVideoFrameCallback === 'function') video.cancelVideoFrameCallback(callbackId);
+      if (observerId != null) {
+        if (usesFrameCallback && typeof video.cancelVideoFrameCallback === 'function') video.cancelVideoFrameCallback(observerId);
+        else if (!usesFrameCallback) clearTimeout(observerId);
+      }
       video.pause();
       video.playbackRate = previousRate;
       video.muted = previousMuted;
@@ -1446,8 +1460,8 @@ function playVideoForwardToTime(video, targetTime, {
     };
     const aborted = () => done(false);
     const observe = () => {
-      callbackId = video.requestVideoFrameCallback((_now, metadata = {}) => {
-        callbackId = null;
+      const check = (_now, metadata = {}) => {
+        observerId = null;
         const mediaTime = Number.isFinite(Number(metadata.mediaTime)) ? Number(metadata.mediaTime) : Number(video.currentTime);
         if (mediaTime + tolerance < targetTime) {
           video.playbackRate = sequentialPlaybackRate(mediaTime, targetTime);
@@ -1455,7 +1469,10 @@ function playVideoForwardToTime(video, targetTime, {
           return;
         }
         done(Math.abs(mediaTime - targetTime) <= tolerance);
-      });
+      };
+      observerId = usesFrameCallback
+        ? video.requestVideoFrameCallback(check)
+        : setTimeout(() => check(performance.now()), 8);
     };
     signal?.addEventListener('abort', aborted, { once: true });
     video.muted = true;
@@ -1626,9 +1643,10 @@ function syncVideoToFrame(video, frame, { exactSeek = false } = {}) {
   // During a held Right key, keep the native decoder moving with the visible
   // frame. Consuming only cached bitmaps leaves the video several seconds
   // behind and causes a hard seek when the rolling cache is exhausted.
-  const cachedFrame = exactSeek || !canUseGlobalVideoCache() ? null : (preferLiveSequentialDecode(video.currentTime, requestedTime)
+  const canAdvanceSequentially = !exactSeek || canUseAdjacentSourceFrameAdvance(video, requestedTime);
+  const cachedFrame = !canUseGlobalVideoCache() || canAdvanceSequentially && isShortForwardAdvance(video.currentTime, requestedTime)
     ? null
-    : cachedVideoFrame(requestedTime));
+    : cachedVideoFrame(requestedTime);
   if (cachedFrame) {
     state.videoSeekAbortController?.abort();
     state.videoSeekToken += 1;
@@ -1667,7 +1685,7 @@ function syncVideoToFrame(video, frame, { exactSeek = false } = {}) {
       video.pause();
       const presented = await seekPresentedVideoFrame(video, target, {
         signal: seekController.signal,
-        allowSequential: !exactSeek,
+        allowSequential: canAdvanceSequentially,
       });
       if (!presented || token !== state.videoSeekToken || !state.videoFile) return false;
       // Native video presentation avoids a full-resolution canvas copy on every frame.
@@ -5186,8 +5204,10 @@ function seekVideo(video, time, { signal } = {}) {
 }
 
 async function captureVideoFrame(video, time) {
-  if (!Number.isFinite(video.duration) || time >= video.duration) return '';
-  const presented = await seekPresentedVideoFrame(video, time);
+  if (!Number.isFinite(video.duration) || video.duration <= 0) return '';
+  const requestedTime = Number(time);
+  const safeTime = Math.max(0, Math.min(video.duration - 0.001, Number.isFinite(requestedTime) ? requestedTime : 0));
+  const presented = await seekPresentedVideoFrame(video, safeTime);
   if (!presented) return '';
   const canvas = document.createElement('canvas');
   canvas.width = video.videoWidth || videoWidth();
