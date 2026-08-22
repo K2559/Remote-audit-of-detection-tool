@@ -131,6 +131,11 @@ const state = {
   frameKeyNavigation: null,
   frameNavigationToken: 0,
   rapidFrameNavigation: false,
+  // A/D inspection keeps the last presented image visible while the exact
+  // source frame is decoded. The media element remains aria-busy, but the
+  // blocking review overlay is reserved for larger navigation requests.
+  fineFrameNavigation: false,
+  fineFrameNavigationToken: 0,
   gesture: null,
   batchErase: { clipIndex: null, startSec: 0, endSec: 0, regions: [] },
   history: [],
@@ -1277,11 +1282,27 @@ function previewVideoTimeForFrame(video, frame, offsetFrames = sourceFrameOffset
   return Math.max(0, Math.min(upperBound, Math.max(minimum, target)));
 }
 
+function cancelFineFrameNavigation() {
+  state.fineFrameNavigationToken += 1;
+  state.fineFrameNavigation = false;
+}
+
+function beginFineFrameNavigation() {
+  const token = ++state.fineFrameNavigationToken;
+  state.fineFrameNavigation = true;
+  return token;
+}
+
+function finishFineFrameNavigation(token) {
+  if (token != null && token === state.fineFrameNavigationToken) state.fineFrameNavigation = false;
+}
+
 function setVideoSeeking(seeking) {
   state.videoSeeking = seeking;
-  const showBusy = seeking && !state.rapidFrameNavigation;
+  const showBusy = seeking && !state.rapidFrameNavigation && !state.fineFrameNavigation;
   const stage = $('#frame-stage');
   stage?.classList.toggle('is-seeking', showBusy);
+  stage?.classList.toggle('fine-seeking', seeking && state.fineFrameNavigation);
   stage?.setAttribute('aria-busy', String(seeking));
   const status = $('#video-state');
   if (!status) return;
@@ -1292,8 +1313,10 @@ function setVideoSeeking(seeking) {
 
 function showVideoError(message) {
   state.videoSeeking = false;
+  cancelFineFrameNavigation();
   const stage = $('#frame-stage');
   stage?.classList.remove('is-seeking');
+  stage?.classList.remove('fine-seeking');
   stage?.setAttribute('aria-busy', 'false');
   const status = $('#video-state');
   if (!status) return;
@@ -1629,6 +1652,10 @@ function syncVideoToFrame(video, frame, { exactSeek = false } = {}) {
   const requestedTime = previewVideoTimeForFrame(video, frame);
   const sameRequestedFrame = state.videoSeekPromise && Math.abs(Number(state.videoRequestedTime) - requestedTime) <= 0.001;
   if (sameRequestedFrame) return state.videoSeekPromise;
+  // Join an in-flight request before creating a new fine-navigation token.
+  // Otherwise a repeated A/D press could replace the token owned by the
+  // original decoder promise and leave the quiet state stuck after it settles.
+  const fineNavigationToken = exactSeek ? beginFineFrameNavigation() : (cancelFineFrameNavigation(), null);
 
   const canvas = $('#frame-canvas');
   const sameDisplayedFrame = state.videoDisplayedTime != null
@@ -1636,6 +1663,7 @@ function syncVideoToFrame(video, frame, { exactSeek = false } = {}) {
     && (!canvas.hidden || video.style.opacity === '1');
   if (sameDisplayedFrame) {
     setVideoSeeking(false);
+    finishFineFrameNavigation(fineNavigationToken);
     recordVideoDecode('current', decodeStartedAt);
     return Promise.resolve(true);
   }
@@ -1657,6 +1685,7 @@ function syncVideoToFrame(video, frame, { exactSeek = false } = {}) {
     state.videoDisplayedTime = requestedTime;
     paintCachedVideoFrame(cachedFrame);
     setVideoSeeking(false);
+    finishFineFrameNavigation(fineNavigationToken);
     recordVideoDecode('cache', decodeStartedAt);
     renderFrameBoxes();
     if (canUseGlobalVideoCache()) scheduleVideoFramePrefetch(video, state.frameIndex);
@@ -1666,7 +1695,9 @@ function syncVideoToFrame(video, frame, { exactSeek = false } = {}) {
   // A non-cached request needs exclusive use of the decoder. The rolling
   // prefetch path is safe to keep running for cache hits, but it must yield for
   // a random seek.
-  stopVideoFramePrefetch();
+  // Fine A/D requests use the independent decoder pool as a look-ahead cache;
+  // cancelling it here would throw away the frame the next keypress needs.
+  if (!exactSeek) stopVideoFramePrefetch();
   state.videoSeekAbortController?.abort();
   const seekController = new AbortController();
   state.videoSeekAbortController = seekController;
@@ -1699,6 +1730,7 @@ function syncVideoToFrame(video, frame, { exactSeek = false } = {}) {
       }
       state.videoDisplayedTime = target;
       setVideoSeeking(false);
+      finishFineFrameNavigation(fineNavigationToken);
       recordVideoDecode(video.dataset?.decodeMode || 'seek', decodeStartedAt);
       renderFrameBoxes();
       if (canUseGlobalVideoCache()) {
@@ -1712,6 +1744,7 @@ function syncVideoToFrame(video, frame, { exactSeek = false } = {}) {
       showVideoError('Frame could not be decoded');
       return false;
     } finally {
+      finishFineFrameNavigation(fineNavigationToken);
       if (token === state.videoSeekToken) {
         state.videoSeekPromise = null;
         state.videoSeekAbortController = null;
@@ -1786,11 +1819,27 @@ async function prefetchAdjacentVideoFrames(_video, originIndex, { signal, count 
   const attachmentToken = state.videoAttachmentToken;
   const originFrame = frames[originIndex];
   if (!originFrame || signal?.aborted || state.frameIndex !== originIndex) return;
-  const originTime = frameTimeline(originFrame);
+  const video = _video;
+  const displayedTime = Number(state.videoDisplayedTime);
+  const originTime = Number.isFinite(displayedTime)
+    ? displayedTime
+    : frameTimeline(originFrame);
   cachedVideoFrame(originTime);
   const decoders = await ensureVideoPrefetchDecoders(attachmentToken);
   if (!decoders.length || signal?.aborted || attachmentToken !== state.videoAttachmentToken) return;
   const targets = [];
+  // Put source-frame neighbors first. This makes a reverse A press a cache
+  // hit even though the native media element cannot play backwards.
+  const fineStep = 1 / sourceFrameRate();
+  const fineDirection = state.videoPrefetchDirection < 0 ? -1 : 1;
+  const fineOffsets = [];
+  for (let offset = 1; offset <= 4; offset += 1) fineOffsets.push(fineDirection * offset);
+  for (let offset = 1; offset <= 4; offset += 1) fineOffsets.push(-fineDirection * offset);
+  for (const offset of fineOffsets) {
+    const target = previewVideoTimeForFrame(video, originFrame, sourceFrameOffset(originFrame) + offset);
+    if (Math.abs(target - originTime) <= fineStep * 0.25) continue;
+    if (!state.videoFrameCache.has(videoFrameCacheKey(target))) targets.push(target);
+  }
   const direction = state.videoPrefetchDirection < 0 ? -1 : 1;
   const offsets = [];
   for (let offset = 1; offset <= count; offset += 1) offsets.push(direction * offset);
@@ -2078,7 +2127,6 @@ function stepSourceVideoFrame(direction) {
 
   stopHeldFrameNavigation({ resumePrefetch: false });
   stopPlayback(false);
-  stopVideoFramePrefetch();
   deferClipThumbnailsForInteraction();
   state.sourceFramePreviewAnchor = frame;
   state.sourceFrameOffset = nextOffset;

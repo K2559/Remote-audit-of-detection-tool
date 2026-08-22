@@ -25,6 +25,9 @@ assert.match(source, /key === 'a' \|\| key === 'd'[\s\S]*?stepSourceVideoFrame/,
 assert.match(source, /stepSourceVideoFrame[\s\S]*?renderFrame\(\{ exactSeek: true \}\)/, 'Fine frame navigation must bypass playback-based decoder advances');
 assert.match(source, /allowSequential && await playVideoForwardToTime/, 'Exact seeks must be able to disable sequential playback');
 assert.match(source, /!usesFrameCallback[\s\S]*?setTimeout\(\(\) => check\(performance\.now\(\)\), 8\)/, 'Fine stepping must have a media-clock fallback when frame callbacks are unavailable');
+assert.match(source, /showBusy = seeking && !state\.rapidFrameNavigation && !state\.fineFrameNavigation/, 'Fine stepping must keep the blocking loading overlay hidden');
+assert.match(source, /fineOffsets[\s\S]*?sourceFrameOffset\(originFrame\) \+ offset/, 'Fine stepping must warm adjacent source-frame cache entries');
+assert.match(source, /if \(sameRequestedFrame\) return state\.videoSeekPromise;[\s\S]*?beginFineFrameNavigation\(\)/, 'Repeated fine requests must join before replacing the active navigation token');
 assert.match(source, /Math\.min\(video\.duration - 0\.001/, 'Heat-map captures must clamp terminal timestamps to a decodable frame');
 assert.doesNotMatch(source, /className = 'box-label'/, 'Review boxes must not render a group-name caption over the image');
 assert.doesNotMatch(css, /\.box-label\b/, 'Removed box captions must not retain obsolete styling');
