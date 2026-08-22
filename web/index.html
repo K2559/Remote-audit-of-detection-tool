@@ -135,9 +135,9 @@
               </div>
               <div class="frame-toolbar">
                 <div class="playback-controls">
-                  <button class="icon-button playback-button" type="button" data-action="previous-frame" aria-label="Previous frame" data-tooltip="Previous frame"><span class="icon" data-icon="chevron-left"></span></button>
+                  <button class="icon-button playback-button" type="button" data-action="previous-frame" aria-label="Previous 10-second sample" data-tooltip="Previous 10-second sample"><span class="icon" data-icon="chevron-left"></span></button>
                   <button class="play-button" type="button" data-action="toggle-play" aria-label="Play or pause"><span class="icon" data-icon="play" id="play-icon"></span></button>
-                  <button class="icon-button playback-button" type="button" data-action="next-frame" aria-label="Next frame" data-tooltip="Next frame"><span class="icon" data-icon="chevron-right"></span></button>
+                  <button class="icon-button playback-button" type="button" data-action="next-frame" aria-label="Next 10-second sample" data-tooltip="Next 10-second sample"><span class="icon" data-icon="chevron-right"></span></button>
                 </div>
                 <div class="timebar-stack" aria-label="Frame navigation timelines">
                   <div class="video-timebar clip-timebar" aria-label="Active clip timeline">
@@ -262,7 +262,11 @@
             <section class="heatmap-card" aria-label="Clip-wide heatmap">
               <div class="heatmap-card-header">
                 <div><span class="section-kicker">AGGREGATED TRACK</span><h2 id="heatmap-title">Select a clip</h2><p id="heatmap-frame-caption" class="heatmap-frame-caption">The overlay combines detections from the full active clip.</p></div>
-                <span class="status-badge status-badge-mint" id="heatmap-summary">0 boxes</span>
+                <div class="heatmap-header-actions">
+                  <label class="heatmap-base-frame-field"><span>Base frame</span><select id="heatmap-base-frame-select" aria-label="Heatmap base frame"></select></label>
+                  <button class="button button-quiet heatmap-use-current-frame" type="button" data-action="heatmap-use-current-frame" aria-label="Use shown frame as heatmap base" title="Use the frame shown on the timeline as the heatmap base"><span class="icon" data-icon="image"></span><span>Use shown frame</span></button>
+                  <span class="status-badge status-badge-mint" id="heatmap-summary">0 boxes</span>
+                </div>
               </div>
               <div class="heatmap-canvas-wrap heatmap-overlay-wrap">
                 <canvas id="heatmap-base-canvas" class="heatmap-base-canvas" aria-label="Grayscale source frame"></canvas>
@@ -316,7 +320,7 @@
             <aside class="report-side-panel" aria-label="Report information and clip selection">
               <section class="report-controls" aria-label="Report details">
                 <div class="report-control-row">
-                  <label class="report-field report-field-wide"><span>Name of Tenderer</span><input id="report-tenderer" type="text" autocomplete="organization" placeholder="Enter tenderer name" /></label>
+                  <label class="report-field report-field-wide"><span>Name of Tenderer</span><input id="report-tenderer" type="text" autocomplete="organization" value="K-Solution Design and Engineering Limited" placeholder="Enter tenderer name" /></label>
                   <label class="report-field"><span>Date of Demonstration</span><input id="report-date" type="date" /></label>
                 </div>
                 <div class="report-control-row report-clip-controls">
@@ -380,7 +384,7 @@
                 <div class="heading-actions">
                   <button class="button" type="button" data-action="prepare-report"><span class="icon" data-icon="refresh"></span><span>Refresh preview</span></button>
                   <button class="button" type="button" data-action="print-report"><span class="icon" data-icon="printer"></span><span>Print current PDF</span></button>
-                  <button class="button button-primary" type="button" data-action="print-report-batch"><span class="icon" data-icon="layers"></span><span>Batch print selected</span></button>
+                  <button class="button button-primary" type="button" data-action="print-report-batch"><span class="icon" data-icon="layers"></span><span>Download PDFs</span></button>
                 </div>
               </div>
               <div id="report-document" class="report-document">
@@ -411,7 +415,7 @@
         </div>
       </section>
     </div>
-    <div id="shortcut-dialog" class="dialog-backdrop" hidden><section class="shortcut-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcut-title"><div class="dialog-header"><div><span class="section-kicker">QUICK REFERENCE</span><h2 id="shortcut-title">Keyboard shortcuts</h2></div><button class="icon-button compact" type="button" data-action="close-shortcuts" aria-label="Close shortcuts"><span class="icon" data-icon="close"></span></button></div><div class="shortcut-list"><div><kbd>Left / Right</kbd><span>Move through sampled frames</span></div><div><kbd>Up / Down</kbd><span>Select detections</span></div><div><kbd>Enter</kbd><span>Accept frame and advance</span></div><div><kbd>Space</kbd><span>Play or pause source video</span></div><div><kbd>Delete</kbd><span>Remove selected detection</span></div><div><kbd>Ctrl + Z</kbd><span>Undo the last edit</span></div></div></section></div>
+    <div id="shortcut-dialog" class="dialog-backdrop" hidden><section class="shortcut-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcut-title"><div class="dialog-header"><div><span class="section-kicker">QUICK REFERENCE</span><h2 id="shortcut-title">Keyboard shortcuts</h2></div><button class="icon-button compact" type="button" data-action="close-shortcuts" aria-label="Close shortcuts"><span class="icon" data-icon="close"></span></button></div><div class="shortcut-list"><div><kbd>Left / Right</kbd><span>Move 10 seconds</span></div><div><kbd>A / D</kbd><span>Move one source frame</span></div><div><kbd>Up / Down or W / S</kbd><span>Select detections</span></div><div><kbd>Enter</kbd><span>Accept frame and advance</span></div><div><kbd>Space</kbd><span>Play or pause source video</span></div><div><kbd>Delete</kbd><span>Remove selected detection</span></div><div><kbd>Ctrl + Z</kbd><span>Undo the last edit</span></div></div></section></div>
     <script src="./app.js" defer></script>
   </body>
 </html>

@@ -14,10 +14,19 @@ const context = vm.createContext({
   requestAnimationFrame: (callback) => setTimeout(callback, 0),
 });
 
-vm.runInContext(`${source}\n;globalThis.auditTest = { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, buildImportPairs, mergeImportedDocuments, reviewSampleStep, sampleReviewFrames, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches, videoSourceIndexForFrame, usesLocalVideoTimeForFrame, videoTimeForFrame, canUseGlobalVideoCache, containedMediaRect, containedPointToPixels, containedPixelsToPercentStyle };`, context);
+vm.runInContext(`${source}\n;globalThis.auditTest = { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, buildImportPairs, mergeImportedDocuments, reviewSampleStep, sampleReviewFrames, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, recoveryVideoDescriptors, recoveryVideoReattachPlan, heatmapBaseFrameSelection, heatmapBaseFrameSelectionKey, heatmapBaseFrameOptionSignature, heatmapShownFrameIndex, heatmapShownFrameTarget, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches, videoSourceIndexForFrame, usesLocalVideoTimeForFrame, videoTimeForFrame, sourceFrameRate, sourcePreviewClipTime, sourcePreviewTimeline, previewVideoTimeForFrame, canUseGlobalVideoCache, containedMediaRect, containedPointToPixels, containedPixelsToPercentStyle };`, context);
 
-const { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, buildImportPairs, mergeImportedDocuments, reviewSampleStep, sampleReviewFrames, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches, videoSourceIndexForFrame, usesLocalVideoTimeForFrame, videoTimeForFrame, canUseGlobalVideoCache, containedMediaRect, containedPointToPixels, containedPixelsToPercentStyle } = context.auditTest;
+const { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, buildImportPairs, mergeImportedDocuments, reviewSampleStep, sampleReviewFrames, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, recoveryVideoDescriptors, recoveryVideoReattachPlan, heatmapBaseFrameSelection, heatmapBaseFrameSelectionKey, heatmapBaseFrameOptionSignature, heatmapShownFrameIndex, heatmapShownFrameTarget, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches, videoSourceIndexForFrame, usesLocalVideoTimeForFrame, videoTimeForFrame, sourceFrameRate, sourcePreviewClipTime, sourcePreviewTimeline, previewVideoTimeForFrame, canUseGlobalVideoCache, containedMediaRect, containedPointToPixels, containedPixelsToPercentStyle } = context.auditTest;
+assert.equal(state.report.tenderer, 'K-Solution Design and Engineering Limited', 'The report must start with the requested editable tenderer name');
 assert.equal(reviewSampleStep(), 10);
+assert.match(source, /function startFrameKeyNavigation\(event\)[\s\S]*?const step = 1;/, 'Arrow keys must always move one 10-second review sample');
+assert.doesNotMatch(source, /event\.shiftKey \? 10 : 1/, 'Shift must not turn arrow navigation into a 100-second jump');
+assert.match(source, /key === 'a' \|\| key === 'd'[\s\S]*?stepSourceVideoFrame/, 'A and D must use source-frame navigation');
+assert.match(source, /stepSourceVideoFrame[\s\S]*?renderFrame\(\{ exactSeek: true \}\)/, 'Fine frame navigation must bypass playback-based decoder advances');
+assert.match(source, /allowSequential && await playVideoForwardToTime/, 'Exact seeks must be able to disable sequential playback');
+assert.doesNotMatch(source, /className = 'box-label'/, 'Review boxes must not render a group-name caption over the image');
+assert.doesNotMatch(css, /\.box-label\b/, 'Removed box captions must not retain obsolete styling');
+assert.match(html, /<kbd>A \/ D<\/kbd><span>Move one source frame<\/span>/, 'The shortcut reference must describe fine source-frame navigation');
 const letterboxed = containedMediaRect(1200, 900, 640, 360);
 assert.ok(Math.abs(letterboxed.top - 112.5) < 0.000001, '16:9 media should be vertically letterboxed in a 4:3 stage');
 assert.equal(letterboxed.left, 0);
@@ -65,12 +74,19 @@ state.doc = normalizeDocument({
   heatmap: { splices_sec: [30] },
   frames,
 });
+const finePreviewFrame = state.doc.frames[1];
+assert.equal(sourceFrameRate(), 25);
+assert.ok(Math.abs(previewVideoTimeForFrame({ duration: 60 }, finePreviewFrame, 1) - 10.04) < 0.000001, 'D must seek exactly one 25 fps source frame forward');
+assert.ok(Math.abs(previewVideoTimeForFrame({ duration: 60 }, finePreviewFrame, -1) - 9.96) < 0.000001, 'A must seek exactly one 25 fps source frame backward');
+assert.ok(Math.abs(sourcePreviewClipTime(finePreviewFrame, 1) - 10.04) < 0.000001, 'Fine navigation must update the clip time readout');
+assert.ok(Math.abs(sourcePreviewTimeline(finePreviewFrame, 1) - 10.04) < 0.000001, 'Fine navigation must update the video timebar without changing the label sample');
 state.report.clips = state.doc.clips;
 
 state.report.tenderer = 'Recovery test tenderer';
 state.report.captures = [{ dataUrl: 'large-generated-image' }];
 state.report.baseImages = { 'clip-1': 'large-generated-image' };
 state.report.heatmapFrameSelections = { 'clip-1': '2' };
+state.heatmapBaseFrameSelections = { 'clip-1': '2' };
 state.report.heatmapImages = { 'clip-1': 'large-generated-heatmap-background' };
 state.recoveryVideo = { name: 'inspection.mp4', duration: 60 };
 const recoverySnapshot = createRecoverySnapshot('2026-08-17T12:00:00.000Z');
@@ -80,13 +96,42 @@ assert.equal(recoverySnapshot.video.name, 'inspection.mp4');
 assert.equal(recoverySnapshot.report.captures, undefined, 'Generated report images must not enter browser recovery storage');
 assert.equal(recoverySnapshot.report.baseImages, undefined, 'Generated base images must not enter browser recovery storage');
 assert.equal(recoverySnapshot.report.heatmapFrameSelections['clip-1'], '2', 'Manual heatmap frame selections must survive recovery');
+assert.equal(recoverySnapshot.heatmapBaseFrameSelections['clip-1'], '2', 'Heatmap page base frame selections must survive recovery');
 assert.equal(recoverySnapshot.report.heatmapImages, undefined, 'Generated heatmap backgrounds must not enter browser recovery storage');
 state.report.tenderer = '';
 state.report.captures = [];
 state.report.baseImages = {};
 state.report.heatmapFrameSelections = {};
+state.heatmapBaseFrameSelections = {};
 state.report.heatmapImages = {};
 state.recoveryVideo = null;
+
+state.doc.video.sources = [
+  { index: 0, video_name: 'clip-a.mp4' },
+  { index: 1, video_name: 'clip-b.mp4' },
+];
+state.recoveryVideos = [{ name: 'clip-a.mp4' }, { name: 'clip-b.mp4' }];
+const recoveryPlan = recoveryVideoReattachPlan([{ name: 'clip-b.mp4', type: 'video/mp4' }, { name: 'clip-a.mp4', type: 'video/mp4' }]);
+assert.equal(recoveryPlan.complete, true, 'Recovered multi-video files should be matched before attachment');
+assert.deepEqual(Array.from(recoveryPlan.files, (file) => file.name), ['clip-a.mp4', 'clip-b.mp4'], 'Recovered sources must be restored in annotation order');
+const partialRecoveryPlan = recoveryVideoReattachPlan([{ name: 'renamed-source.mp4', type: 'video/mp4' }]);
+assert.equal(partialRecoveryPlan.complete, false, 'A partial recovered source selection must stay pending');
+assert.equal(partialRecoveryPlan.candidates[0].name, 'renamed-source.mp4', 'Pending recovery must retain unmatched videos until the rest are selected');
+assert.equal(heatmapBaseFrameSelection(state.doc.clips[0]).sample_index, 0, 'A heatmap base frame should have a deterministic fallback');
+assert.equal(heatmapBaseFrameOptionSignature(state.doc.clips[0]), 'clip-1:0|1|2', 'The base-frame selector should have a stable clip-specific option signature');
+state.heatmapBaseFrameSelections['clip-1'] = '1';
+assert.equal(heatmapBaseFrameSelection(state.doc.clips[0]).sample_index, 1, 'A manually selected heatmap frame must remain selected');
+state.heatmapBaseFrameSelections = {};
+state.heatmapTimelinePreview = 20;
+assert.equal(heatmapShownFrameIndex(), 2, 'Use shown frame must resolve the previewed heatmap time before a delayed timeline commit');
+assert.equal(heatmapShownFrameTarget().clipFrameIndex, 2, 'Using a shown frame must resolve it within the active clip without changing the review cursor');
+state.heatmapTimelinePreview = null;
+const shownCursor = state.frameIndex;
+state.frameIndex = 2;
+assert.equal(heatmapShownFrameIndex(), 2, 'Use shown frame must prefer the committed review cursor when no preview is active');
+state.frameIndex = shownCursor;
+state.doc.video.sources = undefined;
+state.recoveryVideos = [];
 
 assert.equal(boxesIntersect([10, 10, 40, 40], [30, 30, 60, 60]), true, 'Area delete must include overlapping boxes');
 assert.equal(boxesIntersect([10, 10, 20, 20], [21, 21, 30, 30]), false, 'Area delete must leave separate boxes untouched');
@@ -149,16 +194,29 @@ const referencedIds = [...source.matchAll(/\$\(['"]#([^'"\s>+~:[\]]+)/g)].map((m
 const missingIds = [...new Set(referencedIds)].filter((id) => !htmlIds.includes(id));
 assert.deepEqual(missingIds, [], `Missing HTML ids referenced by app.js: ${missingIds.join(', ')}`);
 assert.match(html, /id="report-clip-cuts"/);
+assert.match(html, /id="report-tenderer"[^>]*value="K-Solution Design and Engineering Limited"/, 'The report form must expose the requested editable tenderer default');
+const tendererInput = html.match(/<input id="report-tenderer"[^>]*>/)?.[0] || '';
+assert.doesNotMatch(tendererInput, /\b(?:disabled|readonly)\b/, 'The pre-filled tenderer name must remain editable');
 assert.match(html, /id="report-heatmap-pages"/);
 assert.match(html, /id="report-clip-list"/);
 assert.doesNotMatch(html, /report-clip-inspector|report-clip-time-slider|report-video-time-slider/, 'The redundant report clip inspector must stay removed');
 assert.match(source, /report-heatmap-source-select/, 'Every report clip must expose a heatmap background selector');
 assert.match(source, /report-heatmap-canvas/, 'Report heatmaps must render into a canvas overlay');
 assert.doesNotMatch(source, /report-heatmap-cells|report-heat-cell/, 'Report heatmaps must not regress to tiled DOM cells');
+assert.match(source, /const sourceCanvases = \[\.\.\.page\.querySelectorAll\('canvas'\)\]/, 'Batch PDF export must copy pixels from live canvases before cloning');
+assert.match(source, /xmlns="\$\{xhtmlNamespace\}"/, 'Batch PDF export must serialize report pages in the XHTML namespace');
+assert.match(source, /await waitForReportImage\(image\)/, 'Batch PDF export must wait for embedded report images to decode');
+assert.match(source, /const flattenRules = \(cssRules\) =>/, 'Batch PDF export must flatten print media rules for rasterization');
+assert.match(source, /function inlineReportComputedStyles\(root\)/, 'Batch PDF export must inline computed print styles');
+assert.match(source, /clone\.classList\.remove\('report-page', 'report-page-last'\)/, 'Batch PDF export must replace print-only page footer styling with its own numbered footer');
+assert.match(source, /prepareReportExportClone\(pages\[pageIndex\], pageIndex \+ 1, pages\.length, exportStyles\)/, 'Each exported page must use the print-style staging pass');
 assert.doesNotMatch(source, /report-summary-sheet/, 'The standalone clip summary page must stay removed');
 assert.match(source, /report-count-sheet/, 'Per-clip count reports must remain available');
 assert.match(source, /<th>Time in clip<\/th><th>Detections<\/th>/, 'Per-clip count reports must keep only time and detections');
 assert.doesNotMatch(source, /<th>Source frame<\/th>/, 'Per-clip count reports must not expose a Source frame column');
+assert.doesNotMatch(source, />Appendix\s+[A-Z0-9]+</i, 'Generated report pages must not display appendix labels');
+assert.match(source, /pageIndex \+= pageIndex === 0 \? 1 : 2/, 'The tender-style first page must contain one image before two-image continuation pages');
+assert.match(source, /figure\.append\(media, caption\)/, 'Thermal-image captions must sit below their images');
 assert.match(source, /function renderReportPreview\(\)/, 'Report preview sections must have a shared refresh path');
 assert.match(source, /state\.report\.selectedClipId = clip\.id;[\s\S]*?renderReportPreview\(\);/, 'Selecting a report clip must refresh its preview');
 assert.match(source, /const mode = state\.annotationTool === 'erase' \? 'erase' : 'draw';/, 'Empty review-stage drags must create boxes in Select mode');
@@ -169,6 +227,13 @@ assert.match(html, /data-action="open-json"[^>]*id="json-import-button"/);
 assert.match(html, /data-action="open-video"[^>]*id="video-import-button"/);
 assert.match(html, /id="json-input"[^>]*accept="\.json,application\/json"[^>]*multiple/);
 assert.match(html, /id="video-input"[^>]*multiple/);
+assert.match(html, /id="heatmap-base-frame-select"/);
+assert.match(html, /data-action="heatmap-use-current-frame"/);
+assert.match(source, /if \(select\.dataset\.signature !== signature\)/, 'Heatmap redraws must not replace the frame options while the selector is open');
+assert.match(source, /cached\?\.frameKey === selectedKey && cached\.image/, 'A stale timeline image must not replace the manually selected heatmap base');
+assert.match(source, /heatmapBaseCaptureRequests\.get\(clipKey\) === frameKey/, 'Heatmap redraws must not cancel an in-flight base-frame capture');
+assert.match(source, /async function reattachRecoveredVideos\(files\)/, 'Recovered videos must be attached without rebuilding the saved document');
+assert.match(source, /state\.recoveryReattachFiles = plan\.candidates/, 'Partial recovery must retain all selected source candidates');
 assert.match(html, /id="clip-dialog"/);
 assert.match(html, /data-action="detect-clips"[^>]*id="detect-clips-button"/);
 assert.match(html, /data-action="add-clip"/);
@@ -200,6 +265,9 @@ assert.match(css, /\.erase-region-marker/);
 assert.match(css, /\.batch-erase-panel/);
 assert.match(css, /linear-gradient\(90deg, #151f7a[\s\S]*#d11f2a 100%\)/);
 assert.doesNotMatch(css, /report-heat-spot/);
+assert.match(css, /\.report-document\s*\{[^}]*counter-reset:\s*report-page/);
+assert.match(css, /\.report-page::after\s*\{[^}]*content:\s*"Page " counter\(report-page\)/);
+assert.match(css, /\.report-capture-page \.report-capture-media\s*\{[^}]*width:\s*min\(100%, 125mm\)/, 'Tender capture frames should use the enlarged A4-friendly width');
 
 const videoOnlyDocument = createVideoOnlyDocument({ name: 'inspection.mp4' }, 75.5, 640, 480);
 assert.equal(videoOnlyDocument.source_video, 'inspection.mp4');
@@ -547,6 +615,11 @@ const presentedStart = Date.now();
 assert.equal(await seekPresentedVideoFrame(presentedVideo, 88.2), true);
 assert.ok(Date.now() - presentedStart < 100, 'Presented-frame seeks must not wait for a fixed timeout');
 
+const exactFrameVideo = new MockVideo();
+exactFrameVideo._currentTime = 10;
+assert.equal(await seekPresentedVideoFrame(exactFrameVideo, 10.04, { allowSequential: false }), true);
+assert.deepEqual(exactFrameVideo.assignments, [10.04], 'One-frame navigation must assign the exact media time instead of playing past it');
+
 const timestampOffsetVideo = new MockVideo();
 timestampOffsetVideo.seekOffset = 0.024;
 timestampOffsetVideo.presentationOffset = 0.08;
@@ -602,6 +675,7 @@ const restored = applyRecoveryCheckpoint({
   view: 'report',
   dirty: true,
   video: { name: 'inspection.mp4', duration: 75.5 },
+  heatmapBaseFrameSelections: { 'clip-1': '4' },
   doc: videoOnlyDocument,
   report: {
     tenderer: 'Recovered Tenderer',
@@ -625,6 +699,7 @@ assert.equal(state.dirty, true);
 assert.equal(state.report.tenderer, 'Recovered Tenderer');
 assert.equal(state.report.compliance.infrared, true);
 assert.equal(state.report.heatmapFrameSelections['clip-1'], '3');
+assert.equal(state.heatmapBaseFrameSelections['clip-1'], '4');
 assert.deepEqual(Array.from(state.report.captures), [], 'Decoded and generated media must be rebuilt after recovery');
 assert.deepEqual(Object.keys(state.report.heatmapImages), [], 'Generated heatmap backgrounds must be rebuilt after recovery');
 assert.equal(state.recoveryVideo.name, 'inspection.mp4');
