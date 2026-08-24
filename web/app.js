@@ -1244,13 +1244,16 @@ function currentFrame() { return state.doc?.frames?.[state.frameIndex] || null; 
 function frameTimeline(frame) { return Number(frame?.timeline_sec ?? frame?.timestamp_sec ?? 0); }
 function frameClipTime(frame) { return Number(frame?.clip_time_sec ?? frame?.timestamp_sec ?? 0); }
 function durationSec() { return Number(state.doc?.video?.source_duration_sec || frameTimeline(state.doc?.frames?.at(-1)) || 0); }
-function videoWidth() {
-  const source = videoSourceForFrame(currentFrame());
-  return Math.max(1, Number(source?.width || state.doc?.video?.width || 1280));
+function videoDimensionsForFrame(frame) {
+  const source = videoSourceForFrame(frame);
+  return {
+    width: Math.max(1, Number(source?.width || state.doc?.video?.width || 1280)),
+    height: Math.max(1, Number(source?.height || state.doc?.video?.height || 960)),
+  };
 }
+function videoWidth() { return videoDimensionsForFrame(currentFrame()).width; }
 function videoHeight() {
-  const source = videoSourceForFrame(currentFrame());
-  return Math.max(1, Number(source?.height || state.doc?.video?.height || 960));
+  return videoDimensionsForFrame(currentFrame()).height;
 }
 
 function containedMediaRect(containerWidth, containerHeight, contentWidth, contentHeight) {
@@ -2583,7 +2586,16 @@ function endGesture(event) {
     if (boxUsable(gesture.previewBox)) {
       const box = clampBox(gesture.previewBox);
       recordFrameEdit((frame) => {
-        frame.detections.push({ class_id: state.doc.classes[0]?.id ?? 0, label: state.doc.classes[0]?.name || 'object', confidence: 1, bbox_xyxy_pixels: box, bbox_yolo_normalized: normalizeYolo(box, videoWidth(), videoHeight()) });
+        const dimensions = videoDimensionsForFrame(frame);
+        frame.detections.push({
+          class_id: state.doc.classes[0]?.id ?? 0,
+          label: state.doc.classes[0]?.name || 'object',
+          confidence: 1,
+          source: 'manual',
+          bbox_xyxy_pixels: box,
+          bbox_xyxy_normalized: [box[0] / dimensions.width, box[1] / dimensions.height, box[2] / dimensions.width, box[3] / dimensions.height],
+          bbox_yolo_normalized: normalizeYolo(box, dimensions.width, dimensions.height),
+        });
         frame.review_status = 'edited'; frame.reviewed_at_utc = new Date().toISOString();
       });
       state.selectedDetection = currentFrame().detections.length - 1;
@@ -2591,7 +2603,15 @@ function endGesture(event) {
     }
     state.annotationTool = 'select';
   } else if (['move', 'resize'].includes(gesture.mode) && gesture.previewBox && JSON.stringify(gesture.previewBox) !== JSON.stringify(gesture.original)) {
-    recordFrameEdit((frame) => { frame.detections[gesture.index].bbox_xyxy_pixels = clampBox(gesture.previewBox); frame.detections[gesture.index].bbox_yolo_normalized = normalizeYolo(frame.detections[gesture.index].bbox_xyxy_pixels, videoWidth(), videoHeight()); frame.review_status = 'edited'; frame.reviewed_at_utc = new Date().toISOString(); });
+    recordFrameEdit((frame) => {
+      const box = clampBox(gesture.previewBox);
+      const dimensions = videoDimensionsForFrame(frame);
+      const detection = frame.detections[gesture.index];
+      detection.bbox_xyxy_pixels = box;
+      detection.bbox_xyxy_normalized = [box[0] / dimensions.width, box[1] / dimensions.height, box[2] / dimensions.width, box[3] / dimensions.height];
+      detection.bbox_yolo_normalized = normalizeYolo(box, dimensions.width, dimensions.height);
+      frame.review_status = 'edited'; frame.reviewed_at_utc = new Date().toISOString();
+    });
     showToast(gesture.mode === 'resize' ? 'Box size updated' : 'Box position updated', 'success');
   } else if (gesture.mode === 'erase') {
     if (boxUsable(gesture.previewBox)) {
@@ -3766,15 +3786,30 @@ function heatmapEntriesForFrames(frames) {
   (frames || []).forEach((frame, frameIndex) => {
     (frame.detections || []).forEach((detection) => entries.push({ frame, frameIndex, detection }));
   });
-  const rats = entries.filter(({ detection }) => /(?:^|\b)(rat|rodent|mouse|mice)(?:\b|$)/i.test(String(detection.label || '')));
+  const rats = entries.filter(({ detection }) => /(?:^|\b)(rat|rodent|mouse|mice)(?:\b|$)/i.test(String(detection.label || ''))
+    || detection.source === 'manual'
+    || detection.manual === true);
   return rats.length ? rats : entries;
+}
+
+function normalizedDetectionBox(detection, width, height) {
+  const normalized = numericBox(detection?.bbox_xyxy_normalized) || numericBox(detection?.bboxXyxyNormalized);
+  if (normalized) return normalized;
+  const yolo = numericBox(detection?.bbox_yolo_normalized) || numericBox(detection?.bboxYoloNormalized);
+  if (yolo) return [yolo[0] - yolo[2] / 2, yolo[1] - yolo[3] / 2, yolo[0] + yolo[2] / 2, yolo[1] + yolo[3] / 2];
+  const pixels = numericBox(detection?.bbox_xyxy_pixels) || numericBox(detection?.bboxXyxyPixels);
+  return pixels ? [pixels[0] / width, pixels[1] / height, pixels[2] / width, pixels[3] / height] : null;
 }
 
 function heatmapAggregateForClip(clip) {
   const frames = heatmapFramesForClip(clip);
   const entries = heatmapEntriesForFrames(frames);
   const clipKey = clip ? `${clip.id || clip.index}:${Number(clip.start_sec) || 0}:${Number(clip.end_sec) || 0}` : 'all';
-  const cacheKey = `${clipKey}:${frames.length}:${entries.length}:${videoWidth()}x${videoHeight()}`;
+  const dimensionKey = [...new Set(frames.map((frame) => {
+    const dimensions = videoDimensionsForFrame(frame);
+    return `${dimensions.width}x${dimensions.height}`;
+  }))].sort().join(',');
+  const cacheKey = `${clipKey}:${frames.length}:${entries.length}:${dimensionKey}`;
   const cached = state.heatmapCache.get(cacheKey);
   if (cached) return cached;
 
@@ -3784,22 +3819,23 @@ function heatmapAggregateForClip(clip) {
   const framesWithBoxes = new Set();
   let peak = 0;
   entries.forEach(({ frame, frameIndex, detection }) => {
-    const box = Array.isArray(detection.bbox_xyxy_pixels) ? detection.bbox_xyxy_pixels.map(Number) : null;
-    if (!box || box.length < 4) return;
-    const x1 = Math.max(0, Math.min(videoWidth(), Math.min(box[0], box[2])));
-    const y1 = Math.max(0, Math.min(videoHeight(), Math.min(box[1], box[3])));
-    const x2 = Math.max(x1, Math.min(videoWidth(), Math.max(box[0], box[2])));
-    const y2 = Math.max(y1, Math.min(videoHeight(), Math.max(box[1], box[3])));
+    const dimensions = videoDimensionsForFrame(frame);
+    const normalized = normalizedDetectionBox(detection, dimensions.width, dimensions.height);
+    if (!normalized) return;
+    const x1 = Math.max(0, Math.min(1, Math.min(normalized[0], normalized[2])));
+    const y1 = Math.max(0, Math.min(1, Math.min(normalized[1], normalized[3])));
+    const x2 = Math.max(x1, Math.min(1, Math.max(normalized[0], normalized[2])));
+    const y2 = Math.max(y1, Math.min(1, Math.max(normalized[1], normalized[3])));
     if (x2 <= x1 || y2 <= y1) return;
     framesWithBoxes.add(frame.sample_index ?? frameIndex);
-    const centerX = ((x1 + x2) * 0.5 / videoWidth()) * columns;
-    const centerY = ((y1 + y2) * 0.5 / videoHeight()) * rows;
-    const radiusX = Math.max(1.05, ((x2 - x1) / videoWidth()) * columns * 0.48);
-    const radiusY = Math.max(1.05, ((y2 - y1) / videoHeight()) * rows * 0.48);
-    const minCol = Math.max(0, Math.floor(centerX - radiusX * 2.15));
-    const maxCol = Math.min(columns - 1, Math.ceil(centerX + radiusX * 2.15));
-    const minRow = Math.max(0, Math.floor(centerY - radiusY * 2.15));
-    const maxRow = Math.min(rows - 1, Math.ceil(centerY + radiusY * 2.15));
+    const centerX = ((x1 + x2) * 0.5) * columns;
+    const centerY = ((y1 + y2) * 0.5) * rows;
+    const radiusX = Math.max(0.9, (x2 - x1) * columns * 0.42);
+    const radiusY = Math.max(0.9, (y2 - y1) * rows * 0.42);
+    const minCol = Math.max(0, Math.floor(centerX - radiusX * 1.85));
+    const maxCol = Math.min(columns - 1, Math.ceil(centerX + radiusX * 1.85));
+    const minRow = Math.max(0, Math.floor(centerY - radiusY * 1.85));
+    const maxRow = Math.min(rows - 1, Math.ceil(centerY + radiusY * 1.85));
     const confidence = Math.max(0.2, Math.min(1, Number(detection.confidence) || 1));
     const weight = 0.35 + confidence * 0.65;
     for (let row = minRow; row <= maxRow; row += 1) {
@@ -3807,8 +3843,8 @@ function heatmapAggregateForClip(clip) {
         const dx = (col + 0.5 - centerX) / radiusX;
         const dy = (row + 0.5 - centerY) / radiusY;
         const distance = dx * dx + dy * dy;
-        if (distance > 4.8) continue;
-        const contribution = weight * Math.exp(-distance * 0.92);
+        if (distance > 4.0) continue;
+        const contribution = weight * Math.exp(-distance * 1.08);
         const index = row * columns + col;
         values[index] += contribution;
         if (values[index] > peak) peak = values[index];
@@ -4091,19 +4127,19 @@ function drawHeatmapOverlay(aggregate) {
   const pixels = lowContext.createImageData(low.width, low.height);
   for (let index = 0; index < aggregate.values.length; index += 1) {
     const normalized = aggregate.values[index] / aggregate.peak;
-    if (normalized < 0.012) continue;
+    if (normalized < 0.008) continue;
     const [red, green, blue] = heatmapColor(Math.pow(normalized, 0.78));
     const offset = index * 4;
     pixels.data[offset] = red;
     pixels.data[offset + 1] = green;
     pixels.data[offset + 2] = blue;
-    pixels.data[offset + 3] = Math.min(238, Math.round(255 * Math.pow(normalized, 0.7)));
+    pixels.data[offset + 3] = Math.min(248, Math.round(30 + 218 * Math.pow(normalized, 0.63)));
   }
   lowContext.putImageData(pixels, 0, 0);
   context.save();
-  context.globalAlpha = 0.82;
+  context.globalAlpha = 0.9;
   context.imageSmoothingEnabled = true;
-  context.filter = 'blur(1.2px)';
+  context.filter = 'blur(.9px)';
   context.drawImage(low, 0, 0, overlay.width, overlay.height);
   context.restore();
 }
@@ -5094,9 +5130,8 @@ function reportHeatColor(value) {
 }
 
 // Long clips accumulate low-value Gaussian tails around every detection. Keep
-// those tails transparent so the report emphasizes activity paths, not a blue
-// wash over the whole source frame.
-const REPORT_HEATMAP_MIN_STRENGTH = 0.15;
+// only the weakest tails transparent while retaining a readable blue activity path.
+const REPORT_HEATMAP_MIN_STRENGTH = 0.06;
 
 function reportHeatRgb(value) {
   const stops = [
@@ -5119,7 +5154,7 @@ function reportHeatAlpha(value) {
   const strength = Math.max(0, Math.min(1, Number(value) || 0));
   if (strength <= REPORT_HEATMAP_MIN_STRENGTH) return 0;
   const visibility = (strength - REPORT_HEATMAP_MIN_STRENGTH) / (1 - REPORT_HEATMAP_MIN_STRENGTH);
-  return Math.round(Math.pow(visibility, 0.85) * 255);
+  return Math.round(38 + Math.pow(visibility, 0.78) * 217);
 }
 
 function smoothReportHeatmapCells(cells, columns, rows) {
@@ -5223,7 +5258,6 @@ function renderReportHeatmaps() {
     section.className = 'report-sheet report-page report-heatmap-page';
     section.dataset.clipId = clip.id;
     section.innerHTML = `
-      <div class="report-sample-heading">Sample of &ldquo;Heat Map&rdquo;</div>
       <h2>${REPORT_TENDER_TITLE}</h2>
       <div class="report-reference">(Tender Ref.: ${REPORT_TENDER_REFERENCE})</div>
       <div class="report-annex-meta">
@@ -5297,7 +5331,7 @@ function renderReportCaptures() {
       section.className = `report-sheet report-page report-capture-page${isCover ? ' report-capture-cover' : ' report-capture-continuation'}`;
       section.dataset.clipId = clip.id;
       section.innerHTML = isCover
-        ? `<div class="report-sample-heading">Sample of &ldquo;captured thermal images&rdquo;</div><h2>${REPORT_TENDER_TITLE}</h2><div class="report-reference">(Tender Ref.: ${REPORT_TENDER_REFERENCE})</div><div class="report-annex-meta"><div><strong>Name of Tenderer</strong><span>:</span><em data-page-tenderer></em></div><div><strong>Date of Demonstration</strong><span>:</span><em data-page-date></em></div></div><p class="report-capture-intro">Thermal images captured from the thermal video at time interval of 2-minute<br />with visualisation of boundary box(es) on detected rodent by the A.I. Model</p><p class="report-time-format">Time format: hh:mm:ss</p><div class="report-capture-list"></div>`
+        ? `<h2>${REPORT_TENDER_TITLE}</h2><div class="report-reference">(Tender Ref.: ${REPORT_TENDER_REFERENCE})</div><div class="report-annex-meta"><div><strong>Name of Tenderer</strong><span>:</span><em data-page-tenderer></em></div><div><strong>Date of Demonstration</strong><span>:</span><em data-page-date></em></div></div><p class="report-capture-intro">Thermal images captured from the thermal video at time interval of 2-minute<br />with visualisation of boundary box(es) on detected rodent by the A.I. Model</p><p class="report-time-format">Time format: hh:mm:ss</p><div class="report-capture-list"></div>`
         : '<div class="report-capture-list"></div>';
       section.querySelector('[data-page-tenderer]')?.replaceChildren(document.createTextNode(state.report.tenderer.trim() || 'Not entered'));
       section.querySelector('[data-page-date]')?.replaceChildren(document.createTextNode(formatReportDate(state.report.demonstrationDate)));
