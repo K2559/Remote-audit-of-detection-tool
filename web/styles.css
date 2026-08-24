@@ -1005,7 +1005,7 @@ body * { letter-spacing: 0; }
 .report-frequency-body > span { display: block; margin-bottom: 1px; }
 .report-frequency-scale { width: min(100%, 360px); display: grid; grid-template-columns: 1fr 1fr; align-items: end; }
 .report-frequency-scale > span:last-of-type { text-align: right; }
-.report-frequency-scale div { grid-column: 1 / -1; height: 14px; border: 1px solid #69736e; background: linear-gradient(90deg, #151f7a 0%, #005bd3 17%, #00bed1 34%, #33be4c 52%, #ffe22d 70%, #ff8417 85%, #d11f2a 100%); }
+.report-frequency-scale div { grid-column: 1 / -1; height: 14px; border: 1px solid #69736e; background: linear-gradient(90deg, #0041ff 0%, #0089ff 18%, #00cde1 36%, #33be4c 54%, #ffe22d 72%, #ff8417 86%, #d11f2a 100%); }
 .report-heatmap-band { width: min(100%, 760px); min-height: 31px; display: flex; align-items: center; justify-content: space-between; margin: 0 auto; padding: 6px 10px; border: 1px solid #7f8b84; border-top: 0; border-bottom: 0; background: #cce3c5; color: #17221c; font-family: Georgia, 'Times New Roman', serif; font-size: 10px; }
 .report-heatmap-band strong { font-size: 11px; }
 .report-heatmap-band span { font-family: var(--font-mono); font-size: 8px; }
@@ -1013,8 +1013,9 @@ body * { letter-spacing: 0; }
 .report-heatmap-frame { width: min(100%, 760px); min-height: 455px; display: grid; place-items: center; margin: 0 auto; padding: 16px 70px; border: 1px solid #7f8b84; background: #ffffff; }
 .report-heatmap-plot { position: relative; width: 100%; aspect-ratio: 4 / 3; overflow: hidden; background: #d8ddda; }
 .report-heatmap-frame.no-source .report-heatmap-plot { background: #eef2f0; }
-.report-heatmap-plot > img { width: 100%; height: 100%; display: block; object-fit: cover; filter: grayscale(1) contrast(1.16) brightness(.9); }
-.report-heatmap-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; mix-blend-mode: screen; opacity: .86; filter: blur(.35px); }
+.report-heatmap-plot > .report-heatmap-base-image { width: 100%; height: 100%; display: block; object-fit: cover; filter: grayscale(1) contrast(1.16) brightness(.9); }
+.report-heatmap-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; mix-blend-mode: screen; opacity: .94; filter: blur(.35px); }
+.report-heatmap-export-image { width: 100%; height: 100%; display: block; object-fit: cover; }
 .report-media-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 20px; background: #eef2f0; color: #65756d; font-size: 11px; font-weight: 700; text-align: center; }
 .report-heatmap-note { text-align: center; }
 
@@ -1107,9 +1108,9 @@ body * { letter-spacing: 0; }
 .report-capture figcaption { margin-bottom: 6px; color: #17221c; font-size: 10px; font-weight: 750; }
 .report-capture-media { position: relative; width: min(100%, 690px); aspect-ratio: 4 / 3; overflow: hidden; margin: 0 auto; border: 1px solid #9dafa5; background: #101616; }
 .report-capture-media > img { width: 100%; height: 100%; display: block; object-fit: contain; }
+.report-capture-export-image { width: 100%; height: 100%; display: block; object-fit: contain; }
 .report-capture-boxes { position: absolute; inset: 0; }
 .report-capture-box { position: absolute; border: 2px solid #ff604f; box-shadow: 0 0 0 1px rgba(255, 255, 255, .7); }
-.report-capture-box > span { position: absolute; top: -17px; left: -2px; min-height: 15px; display: inline-flex; align-items: center; padding: 0 4px; background: #ff604f; color: #ffffff; font-size: 7px; font-weight: 800; text-transform: uppercase; }
 .report-capture-source { margin-top: 5px; color: #65756d; font-family: var(--font-mono); font-size: 8px; text-align: center; }
 
 /* Tender-style captured-image pages. Keep the screen preview close to the

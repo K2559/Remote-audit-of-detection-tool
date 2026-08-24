@@ -66,6 +66,8 @@ const RECOVERY_MAX_WAIT_MS = 5000;
 const REVIEW_SAMPLE_INTERVAL_SEC = 10;
 const REVIEW_SAMPLE_FPS = 1 / REVIEW_SAMPLE_INTERVAL_SEC;
 const REVIEW_PLAYBACK_FPS = 5;
+const SOURCE_INSPECTION_INTERVAL_SEC = 0.5;
+const VIDEO_PREFETCH_IDLE_DELAY_MS = 180;
 
 let recoveryDatabasePromise = null;
 
@@ -105,6 +107,7 @@ const state = {
   videoPrefetchTimer: null,
   videoPrefetchAbortController: null,
   videoPrefetchQueuedOrigin: null,
+  videoPrefetchQueuedDelay: 0,
   videoPrefetchDecoders: [],
   videoPrefetchSetupPromise: null,
   videoPrefetchGeneration: 0,
@@ -132,7 +135,7 @@ const state = {
   frameNavigationToken: 0,
   rapidFrameNavigation: false,
   // A/D inspection keeps the last presented image visible while the exact
-  // source frame is decoded. The media element remains aria-busy, but the
+  // half-second target is decoded. The media element remains aria-busy, but the
   // blocking review overlay is reserved for larger navigation requests.
   fineFrameNavigation: false,
   fineFrameNavigationToken: 0,
@@ -608,16 +611,92 @@ function importStemsMatch(left, right) {
   return a === b || (a.length >= 12 && b.length >= 12 && (a.includes(b) || b.includes(a)));
 }
 
-function buildImportPairs(videoFiles = [], jsonFiles = []) {
+function importNameMatchScore(actual, expected, exactScore, containedScore) {
+  const actualName = fileNameOnly(actual);
+  const expectedName = fileNameOnly(expected);
+  if (!actualName || !expectedName) return 0;
+  if (actualName === expectedName) return exactScore;
+  const actualStem = comparableVideoStem(actualName);
+  const expectedStem = comparableVideoStem(expectedName);
+  if (actualStem.length < 12 || expectedStem.length < 12) return 0;
+  if (actualStem === expectedStem) return exactScore - 1000;
+  if (actualStem.includes(expectedStem) || expectedStem.includes(actualStem)) {
+    return containedScore + Math.min(actualStem.length, expectedStem.length);
+  }
+  return 0;
+}
+
+function videoDocumentMatchScore(video, doc) {
+  if (!video || !doc) return 0;
+  const sourceScore = Math.max(0, ...documentSourceVideoFileNames(doc).map((name) => (
+    importNameMatchScore(video.name, name, 600000, 500000)
+  )));
+  const renderedScore = Math.max(0, ...documentRenderedVideoFileNames(doc).map((name) => (
+    importNameMatchScore(video.name, name, 550000, 450000)
+  )));
+  return Math.max(sourceScore, renderedScore);
+}
+
+function importPairScore(video, json, doc) {
+  const metadataScore = videoDocumentMatchScore(video, doc);
+  if (metadataScore) return metadataScore;
+  return importStemsMatch(video?.name, json?.name)
+    ? 300000 + Math.min(importStem(video.name).length, importStem(json.name).length)
+    : 0;
+}
+
+function buildImportPairs(videoFiles = [], jsonFiles = [], jsonDocuments = []) {
   const videos = [...videoFiles];
   const jsons = [...jsonFiles];
+  const docs = [...jsonDocuments];
+  const candidates = [];
+  videos.forEach((video, videoIndex) => {
+    jsons.forEach((json, jsonIndex) => {
+      const score = importPairScore(video, json, docs[jsonIndex]);
+      if (score > 0) candidates.push({ videoIndex, jsonIndex, score });
+    });
+  });
+  candidates.sort((left, right) => (
+    right.score - left.score
+    || left.videoIndex - right.videoIndex
+    || left.jsonIndex - right.jsonIndex
+  ));
+
+  const matchedJsonByVideo = new Map();
+  const usedVideos = new Set();
   const usedJson = new Set();
+  candidates.forEach(({ videoIndex, jsonIndex }) => {
+    if (usedVideos.has(videoIndex) || usedJson.has(jsonIndex)) return;
+    usedVideos.add(videoIndex);
+    usedJson.add(jsonIndex);
+    matchedJsonByVideo.set(videoIndex, jsonIndex);
+  });
+
+  // Preserve order only for legacy batches that provide neither source names
+  // nor useful filename stems. Never use it when one side is incomplete.
+  if (videos.length === jsons.length) {
+    const remainingJsonIndexes = jsons.map((_json, index) => index).filter((index) => !usedJson.has(index));
+    let remainingJsonCursor = 0;
+    videos.forEach((_video, videoIndex) => {
+      if (usedVideos.has(videoIndex)) return;
+      const jsonIndex = remainingJsonIndexes[remainingJsonCursor];
+      remainingJsonCursor += 1;
+      if (jsonIndex == null) return;
+      usedVideos.add(videoIndex);
+      usedJson.add(jsonIndex);
+      matchedJsonByVideo.set(videoIndex, jsonIndex);
+    });
+  }
+
   const pairs = [];
   videos.forEach((video, videoIndex) => {
-    let jsonIndex = jsons.findIndex((json, index) => !usedJson.has(index) && importStemsMatch(video.name, json.name));
-    if (jsonIndex < 0 && jsons[videoIndex] && !usedJson.has(videoIndex)) jsonIndex = videoIndex;
-    if (jsonIndex >= 0) usedJson.add(jsonIndex);
-    pairs.push({ video, json: jsonIndex >= 0 ? jsons[jsonIndex] : null, videoIndex, jsonIndex: jsonIndex >= 0 ? jsonIndex : null });
+    const jsonIndex = matchedJsonByVideo.get(videoIndex);
+    if (jsonIndex != null) {
+      pairs.push({ video, json: jsons[jsonIndex], videoIndex, jsonIndex });
+      return;
+    }
+    const isAlternateRendition = docs.some((doc) => videoDocumentMatchScore(video, doc) > 0);
+    if (!isAlternateRendition) pairs.push({ video, json: null, videoIndex, jsonIndex: null });
   });
   jsons.forEach((json, jsonIndex) => {
     if (!usedJson.has(jsonIndex)) pairs.push({ video: null, json, videoIndex: null, jsonIndex });
@@ -661,10 +740,13 @@ function mergeImportedDocuments(entries = []) {
     const sourceVideo = String(media.name || entry.video?.file?.name || doc.source_video || '');
     const sourceJson = String(entry.jsonName || '');
     const clipName = String(entry.clipName || sourceVideo || sourceJson || `Clip ${clipIndex + 1}`).replace(/\.[^.]+$/, '');
+    const timelineKind = videoTimelineKind(media.file || sourceVideo, doc);
+    if (entry.video) entry.video.timeline_kind = timelineKind;
     const sourceRecord = {
       index: entry.videoIndex == null ? null : Number(entry.videoIndex),
       video_name: sourceVideo,
       json_name: sourceJson,
+      timeline_kind: timelineKind,
       duration: localDuration,
       width: Number(media.width) || Number(doc.video?.width) || 0,
       height: Number(media.height) || Number(doc.video?.height) || 0,
@@ -993,7 +1075,14 @@ function normalizeDocument(raw) {
   const sourceFps = Number(doc.sampling.source_fps) > 0 ? Number(doc.sampling.source_fps) : 25;
   const useRenderedTimeline = Boolean(doc.rendered_sampled_video || doc.video.rendered_sampled_video);
   doc.frames = rawFrames.map((frame, index) => {
-    const sourceTimestamp = finiteNumber(frame.timestamp_sec, frame.timestampSeconds, frame.outputTimestampSeconds, index / inputSampleFps) ?? 0;
+    const sourceTimestamp = finiteNumber(
+      frame.source_timestamp_sec,
+      frame.sourceTimestampSeconds,
+      frame.timestamp_sec,
+      frame.timestampSeconds,
+      frame.outputTimestampSeconds,
+      index / inputSampleFps,
+    ) ?? 0;
     const outputTimestamp = finiteNumber(frame.output_timestamp_sec, frame.outputTimestampSeconds);
     const timestamp = useRenderedTimeline && outputTimestamp != null ? outputTimestamp : sourceTimestamp;
     const sampleIndex = finiteNumber(frame.sample_index, frame.sampleIndex, index) ?? index;
@@ -1210,6 +1299,11 @@ function videoSourceForFrame(frame) {
   return sourceIndex == null ? null : state.videoSources[sourceIndex] || null;
 }
 
+function attachedVideoSourceForFrame(frame) {
+  return videoSourceForFrame(frame)
+    || (!hasImportedClipSources() && state.videoSources.length === 1 ? state.videoSources[0] : null);
+}
+
 function usesLocalVideoTimeForSource(sourceIndex) {
   return hasMultipleVideoSources() || (hasImportedClipSources() && sourceIndex != null);
 }
@@ -1226,14 +1320,55 @@ function canUseGlobalVideoCache() {
   return !hasMultipleVideoSources() && !hasImportedClipSources();
 }
 
+function frameMediaTime(frame, source = attachedVideoSourceForFrame(frame)) {
+  const timelineKind = normalizedVideoTimelineKind(source?.timeline_kind);
+  if (timelineKind === 'source') {
+    const sourceTimestamp = finiteNumber(frame?.source_timestamp_sec, frame?.sourceTimestampSeconds);
+    if (sourceTimestamp != null) return Math.max(0, sourceTimestamp);
+  }
+  if (timelineKind === 'rendered') {
+    const outputTimestamp = finiteNumber(frame?.output_timestamp_sec, frame?.outputTimestampSeconds);
+    if (outputTimestamp != null) return Math.max(0, outputTimestamp);
+  }
+  return Math.max(0, usesLocalVideoTimeForFrame(frame) ? frameClipTime(frame) : frameTimeline(frame));
+}
+
+function mediaTimeForTimeline(clip, timelineTime, source) {
+  const requestedTimeline = Math.max(0, Number(timelineTime) || 0);
+  const timelineKind = normalizedVideoTimelineKind(source?.timeline_kind);
+  if (timelineKind === 'source' || timelineKind === 'rendered') {
+    const clipIndex = Number.isInteger(Number(clip?.index))
+      ? Number(clip.index)
+      : state.doc?.clips?.indexOf(clip);
+    const frames = (state.doc?.frames || []).filter((frame) => Number(frame?.clip_index ?? 0) === clipIndex);
+    const nearest = frames.reduce((best, frame) => (
+      !best || Math.abs(frameTimeline(frame) - requestedTimeline) < Math.abs(frameTimeline(best) - requestedTimeline)
+        ? frame
+        : best
+    ), null);
+    if (nearest) return Math.max(0, frameMediaTime(nearest, source) + requestedTimeline - frameTimeline(nearest));
+  }
+  return usesLocalVideoTimeForClip(clip)
+    ? Math.max(0, requestedTimeline - (Number(clip?.start_sec) || 0))
+    : requestedTimeline;
+}
+
 function videoTimeForFrame(video, frame) {
-  const target = Math.max(0, usesLocalVideoTimeForFrame(frame) ? frameClipTime(frame) : frameTimeline(frame));
+  const target = frameMediaTime(frame);
   if (!Number.isFinite(video.duration) || video.duration <= 0) return target;
   return Math.min(target, Math.max(0, video.duration - 0.001));
 }
 
 function sourceFrameRate() {
   return Math.max(1, Number(state.doc?.sampling?.source_fps) || 25);
+}
+
+function sourceInspectionStepSeconds() {
+  return SOURCE_INSPECTION_INTERVAL_SEC;
+}
+
+function sourceInspectionStepFrames() {
+  return sourceInspectionStepSeconds() * sourceFrameRate();
 }
 
 function sourceFrameOffset(frame = currentFrame()) {
@@ -1266,10 +1401,13 @@ function sourcePreviewTimeline(frame, offsetFrames = sourceFrameOffset(frame)) {
 
 function previewVideoTimeForFrame(video, frame, offsetFrames = sourceFrameOffset(frame)) {
   const localTime = usesLocalVideoTimeForFrame(frame);
-  const anchor = localTime ? frameClipTime(frame) : frameTimeline(frame);
+  const source = attachedVideoSourceForFrame(frame);
+  const timelineKind = normalizedVideoTimelineKind(source?.timeline_kind);
+  const mappedTimeline = timelineKind === 'source' || timelineKind === 'rendered';
+  const anchor = frameMediaTime(frame, source);
   const clip = state.doc?.clips?.[frame?.clip_index ?? 0];
-  const minimum = clip && !localTime ? Math.max(0, Number(clip.start_sec) || 0) : 0;
-  const maximum = clip
+  const minimum = !mappedTimeline && clip && !localTime ? Math.max(0, Number(clip.start_sec) || 0) : 0;
+  const maximum = !mappedTimeline && clip
     ? (localTime
       ? Math.max(0, Number(clip.end_sec) - Number(clip.start_sec))
       : Math.max(minimum, Number(clip.end_sec) || minimum))
@@ -1657,6 +1795,11 @@ function syncVideoToFrame(video, frame, { exactSeek = false } = {}) {
   // original decoder promise and leave the quiet state stuck after it settles.
   const fineNavigationToken = exactSeek ? beginFineFrameNavigation() : (cancelFineFrameNavigation(), null);
 
+  // A/D seeks must have exclusive access to the browser's media decoder.
+  // Prefetch keeps separate video elements, but those elements still compete
+  // for demux/decode work and disk bandwidth on long source files.
+  if (exactSeek) stopVideoFramePrefetch();
+
   const canvas = $('#frame-canvas');
   const sameDisplayedFrame = state.videoDisplayedTime != null
     && Math.abs(Number(state.videoDisplayedTime) - requestedTime) <= 0.001
@@ -1688,16 +1831,16 @@ function syncVideoToFrame(video, frame, { exactSeek = false } = {}) {
     finishFineFrameNavigation(fineNavigationToken);
     recordVideoDecode('cache', decodeStartedAt);
     renderFrameBoxes();
-    if (canUseGlobalVideoCache()) scheduleVideoFramePrefetch(video, state.frameIndex);
+    if (canUseGlobalVideoCache()) {
+      scheduleVideoFramePrefetch(video, state.frameIndex, exactSeek ? VIDEO_PREFETCH_IDLE_DELAY_MS : 0);
+    }
     return Promise.resolve(true);
   }
 
-  // A non-cached request needs exclusive use of the decoder. The rolling
-  // prefetch path is safe to keep running for cache hits, but it must yield for
-  // a random seek.
-  // Fine A/D requests use the independent decoder pool as a look-ahead cache;
-  // cancelling it here would throw away the frame the next keypress needs.
-  if (!exactSeek) stopVideoFramePrefetch();
+  // A non-cached request needs exclusive use of the decoder. Exact A/D
+  // requests already stopped look-ahead above; regular navigation also yields
+  // before a random seek so it cannot compete with the visible frame.
+  stopVideoFramePrefetch();
   state.videoSeekAbortController?.abort();
   const seekController = new AbortController();
   state.videoSeekAbortController = seekController;
@@ -1707,6 +1850,7 @@ function syncVideoToFrame(video, frame, { exactSeek = false } = {}) {
   setVideoSeeking(true);
 
   const seekPromise = (async () => {
+    let framePresented = false;
     try {
       await waitForVideoMetadata(video);
       if (token !== state.videoSeekToken || !state.videoFile) return false;
@@ -1728,6 +1872,7 @@ function syncVideoToFrame(video, frame, { exactSeek = false } = {}) {
         paintVideoFrame(video);
         video.style.opacity = '0';
       }
+      framePresented = true;
       state.videoDisplayedTime = target;
       setVideoSeeking(false);
       finishFineFrameNavigation(fineNavigationToken);
@@ -1735,11 +1880,16 @@ function syncVideoToFrame(video, frame, { exactSeek = false } = {}) {
       renderFrameBoxes();
       if (canUseGlobalVideoCache()) {
         void cachePresentedVideoFrame(video, target, state.videoAttachmentToken);
-        scheduleVideoFramePrefetch(video, state.frameIndex);
+        scheduleVideoFramePrefetch(video, state.frameIndex, exactSeek ? VIDEO_PREFETCH_IDLE_DELAY_MS : 0);
       }
       return true;
     } catch (error) {
       if (token !== state.videoSeekToken) return false;
+      if (framePresented) {
+        console.warn('Frame displayed, but post-decode work failed', error);
+        setVideoSeeking(false);
+        return true;
+      }
       console.error(error);
       showVideoError('Frame could not be decoded');
       return false;
@@ -1759,6 +1909,7 @@ function stopVideoFramePrefetch() {
   clearTimeout(state.videoPrefetchTimer);
   state.videoPrefetchTimer = null;
   state.videoPrefetchQueuedOrigin = null;
+  state.videoPrefetchQueuedDelay = 0;
   state.videoPrefetchAbortController?.abort();
   state.videoPrefetchAbortController = null;
 }
@@ -1783,7 +1934,9 @@ async function ensureVideoPrefetchDecoders(attachmentToken) {
   if (state.videoPrefetchSetupPromise) return state.videoPrefetchSetupPromise;
   const sourceUrl = state.videoUrl;
   const generation = state.videoPrefetchGeneration;
-  const decoderCount = Math.min(4, Math.max(2, Math.floor((globalThis.navigator?.hardwareConcurrency || 4) / 2)));
+  // Two decoders are enough to fill the adjacent-frame window while keeping
+  // keyboard seeks responsive on long, high-resolution source videos.
+  const decoderCount = Math.min(2, Math.max(1, Math.floor((globalThis.navigator?.hardwareConcurrency || 4) / 2)));
   const decoders = Array.from({ length: decoderCount }, () => {
     const video = document.createElement('video');
     video.preload = 'metadata';
@@ -1828,13 +1981,14 @@ async function prefetchAdjacentVideoFrames(_video, originIndex, { signal, count 
   const decoders = await ensureVideoPrefetchDecoders(attachmentToken);
   if (!decoders.length || signal?.aborted || attachmentToken !== state.videoAttachmentToken) return;
   const targets = [];
-  // Put source-frame neighbors first. This makes a reverse A press a cache
-  // hit even though the native media element cannot play backwards.
-  const fineStep = 1 / sourceFrameRate();
+  // Put half-second inspection neighbors first. This makes a reverse A press
+  // a cache hit even though the native media element cannot play backwards.
+  const fineStep = sourceInspectionStepSeconds();
+  const fineFrameStep = sourceInspectionStepFrames();
   const fineDirection = state.videoPrefetchDirection < 0 ? -1 : 1;
   const fineOffsets = [];
-  for (let offset = 1; offset <= 4; offset += 1) fineOffsets.push(fineDirection * offset);
-  for (let offset = 1; offset <= 4; offset += 1) fineOffsets.push(-fineDirection * offset);
+  for (let offset = 1; offset <= 4; offset += 1) fineOffsets.push(fineDirection * offset * fineFrameStep);
+  for (let offset = 1; offset <= 4; offset += 1) fineOffsets.push(-fineDirection * offset * fineFrameStep);
   for (const offset of fineOffsets) {
     const target = previewVideoTimeForFrame(video, originFrame, sourceFrameOffset(originFrame) + offset);
     if (Math.abs(target - originTime) <= fineStep * 0.25) continue;
@@ -1847,7 +2001,7 @@ async function prefetchAdjacentVideoFrames(_video, originIndex, { signal, count 
   for (const offset of offsets) {
     const frame = frames[originIndex + offset];
     if (!frame) continue;
-    const target = frameTimeline(frame);
+    const target = videoTimeForFrame(video, frame);
     if (!state.videoFrameCache.has(videoFrameCacheKey(target))) targets.push(target);
   }
   if (!targets.length) return;
@@ -1869,24 +2023,29 @@ async function prefetchAdjacentVideoFrames(_video, originIndex, { signal, count 
 
 function scheduleVideoFramePrefetch(video, originIndex, delay = 0) {
   state.videoPrefetchQueuedOrigin = originIndex;
+  state.videoPrefetchQueuedDelay = Math.max(0, Number(delay) || 0);
   // Keep the current fill alive, then extend the window from the newest frame.
   if (state.videoPrefetchAbortController) return;
   clearTimeout(state.videoPrefetchTimer);
   const rollingReversePrefetch = state.rapidFrameNavigation && state.videoPrefetchDirection < 0;
   if (!state.videoFile || hasImportedClipSources() || state.playing || (state.rapidFrameNavigation && !rollingReversePrefetch) || state.view !== 'review') return;
+  const queuedDelay = state.videoPrefetchQueuedDelay;
   state.videoPrefetchTimer = setTimeout(() => {
     state.videoPrefetchTimer = null;
     const queuedOrigin = state.videoPrefetchQueuedOrigin;
     state.videoPrefetchQueuedOrigin = null;
+    state.videoPrefetchQueuedDelay = 0;
     if (queuedOrigin == null) return;
     const controller = new AbortController();
     state.videoPrefetchAbortController = controller;
     void prefetchAdjacentVideoFrames(video, queuedOrigin, { signal: controller.signal }).finally(() => {
       if (state.videoPrefetchAbortController !== controller) return;
       state.videoPrefetchAbortController = null;
-      if (state.videoPrefetchQueuedOrigin != null) scheduleVideoFramePrefetch(video, state.videoPrefetchQueuedOrigin);
+      if (state.videoPrefetchQueuedOrigin != null) {
+        scheduleVideoFramePrefetch(video, state.videoPrefetchQueuedOrigin, state.videoPrefetchQueuedDelay);
+      }
     });
-  }, delay);
+  }, Math.max(0, queuedDelay));
 }
 
 function formatTime(seconds, frames = false) {
@@ -2113,20 +2272,21 @@ function stepSourceVideoFrame(direction) {
   const source = videoSourceForFrame(frame);
   const frameHasVideo = Boolean(state.videoFile && (source || (!hasImportedClipSources() && !hasMultipleVideoSources())));
   if (state.view !== 'review' || !frame || !video || !frameHasVideo) {
-    showToast('Attach the source video for one-frame inspection', 'error');
+    showToast('Attach the source video for half-second inspection', 'error');
     return false;
   }
 
   const step = Math.sign(Number(direction) || 0);
   if (!step) return false;
   const currentOffset = sourceFrameOffset(frame);
-  const nextOffset = currentOffset + step;
+  const nextOffset = currentOffset + step * sourceInspectionStepFrames();
   const currentTime = previewVideoTimeForFrame(video, frame, currentOffset);
   const nextTime = previewVideoTimeForFrame(video, frame, nextOffset);
   if (Math.abs(nextTime - currentTime) <= 0.0005) return false;
 
   stopHeldFrameNavigation({ resumePrefetch: false });
   stopPlayback(false);
+  stopVideoFramePrefetch();
   deferClipThumbnailsForInteraction();
   state.sourceFramePreviewAnchor = frame;
   state.sourceFrameOffset = nextOffset;
@@ -2659,8 +2819,9 @@ function renderFrame({ exactSeek = false } = {}) {
   $('#stage-empty').hidden = Boolean(frameHasVideo || state.sourceJsonName === 'demo-labels.json');
   const previewOffset = sourceFrameOffset(frame);
   const previewClipTime = sourcePreviewClipTime(frame, previewOffset);
+  const previewOffsetSeconds = previewOffset / sourceFrameRate();
   const previewSuffix = previewOffset
-    ? ` / ${formatTime(previewClipTime, true)} (${previewOffset > 0 ? '+' : ''}${previewOffset}f)`
+    ? ` / ${formatTime(previewClipTime, true)} (${previewOffsetSeconds > 0 ? '+' : ''}${previewOffsetSeconds.toFixed(1)}s)`
     : ` / ${formatTime(previewClipTime)}`;
   $('#frame-index-label').textContent = `FRAME ${String(frame.sample_index).padStart(4, '0')}`;
   $('#frame-time-label').textContent = `Clip ${(frame.clip_index ?? 0) + 1}${previewSuffix}`;
@@ -3815,7 +3976,7 @@ async function captureHeatmapBaseFrame(clip, frame = heatmapBaseFrameSelection(c
       sourceVideo.preload = 'metadata';
       sourceVideo.src = sourceDescriptor?.url || fallbackUrl;
       await waitForVideoMetadata(sourceVideo);
-      const requestedTime = usesLocalVideoTimeForFrame(frame) ? frameClipTime(frame) : frameTimeline(frame);
+      const requestedTime = frameMediaTime(frame, sourceDescriptor);
       const duration = Math.max(0, Number(sourceVideo.duration) || 0);
       // The browser cannot seek exactly to a video's terminal timestamp.
       const captureTime = Math.min(Math.max(0, requestedTime), Math.max(0, duration - 0.001));
@@ -4664,7 +4825,7 @@ async function captureReportHeatmapFrame(clip, frame = reportHeatmapFrameSelecti
       sourceVideo.preload = 'metadata';
       sourceVideo.src = sourceDescriptor?.url || fallbackUrl;
       await waitForVideoMetadata(sourceVideo);
-      source = await captureVideoFrame(sourceVideo, usesLocalVideoTimeForFrame(frame) ? frameClipTime(frame) : frameTimeline(frame));
+      source = await captureVideoFrame(sourceVideo, frameMediaTime(frame, sourceDescriptor));
     }
   } catch (error) {
     console.warn(error);
@@ -4932,11 +5093,16 @@ function reportHeatColor(value) {
   return `rgb(${reportHeatRgb(value).join(', ')})`;
 }
 
+// Long clips accumulate low-value Gaussian tails around every detection. Keep
+// those tails transparent so the report emphasizes activity paths, not a blue
+// wash over the whole source frame.
+const REPORT_HEATMAP_MIN_STRENGTH = 0.15;
+
 function reportHeatRgb(value) {
   const stops = [
-    [0, [21, 31, 122]],
-    [0.18, [0, 91, 211]],
-    [0.36, [0, 190, 209]],
+    [0, [0, 65, 255]],
+    [0.18, [0, 137, 255]],
+    [0.36, [0, 205, 225]],
     [0.54, [51, 190, 76]],
     [0.72, [255, 226, 45]],
     [0.86, [255, 132, 23]],
@@ -4947,6 +5113,13 @@ function reportHeatRgb(value) {
   const [leftPoint, left] = stops[upperIndex - 1];
   const [rightPoint, right] = stops[upperIndex];
   return interpolateColor(left, right, (t - leftPoint) / Math.max(0.001, rightPoint - leftPoint));
+}
+
+function reportHeatAlpha(value) {
+  const strength = Math.max(0, Math.min(1, Number(value) || 0));
+  if (strength <= REPORT_HEATMAP_MIN_STRENGTH) return 0;
+  const visibility = (strength - REPORT_HEATMAP_MIN_STRENGTH) / (1 - REPORT_HEATMAP_MIN_STRENGTH);
+  return Math.round(Math.pow(visibility, 0.85) * 255);
 }
 
 function smoothReportHeatmapCells(cells, columns, rows) {
@@ -5029,12 +5202,14 @@ function drawReportHeatmapCanvas(canvas, heatmap) {
   heatmap.cells.forEach((value, index) => {
     if (value <= 0) return;
     const strength = Math.max(0, Math.min(1, value / heatmap.peak));
+    const alpha = reportHeatAlpha(strength);
+    if (!alpha) return;
     const [red, green, blue] = reportHeatRgb(strength);
     const offset = index * 4;
     pixels.data[offset] = red;
     pixels.data[offset + 1] = green;
     pixels.data[offset + 2] = blue;
-    pixels.data[offset + 3] = Math.round(20 + strength * 205);
+    pixels.data[offset + 3] = alpha;
   });
   context.putImageData(pixels, 0, 0);
 }
@@ -5065,7 +5240,7 @@ function renderReportHeatmaps() {
       </div>
       <div class="report-heatmap-band"><strong>Heat map</strong><span><b data-heatmap-clip></b> / <i data-heatmap-range></i></span></div>
       <div class="report-heatmap-frame">
-        <div class="report-heatmap-plot"><img alt="Grayscale thermal image used for the activity heat map" /><canvas class="report-heatmap-canvas" aria-hidden="true"></canvas><div class="report-media-empty" hidden></div></div>
+        <div class="report-heatmap-plot"><img class="report-heatmap-base-image" alt="Grayscale thermal image used for the activity heat map" /><canvas class="report-heatmap-canvas" aria-hidden="true"></canvas><div class="report-media-empty" hidden></div></div>
       </div>
       <p class="report-note report-heatmap-note"></p>`;
     section.querySelector('[data-heatmap-clip]').textContent = clip.name;
@@ -5102,9 +5277,6 @@ function renderCaptureBoxes(container, frame) {
     const box = document.createElement('span');
     box.className = 'report-capture-box';
     Object.assign(box.style, containedPixelsToPercentStyle(detection.bbox_xyxy_pixels, 4, 3, sourceWidth, sourceHeight));
-    const label = document.createElement('span');
-    label.textContent = 'Rodent';
-    box.append(label);
     container.append(box);
   });
 }
@@ -5309,7 +5481,7 @@ async function prepareReportMedia({ silent = false } = {}) {
         const sourceVideo = await getSourceVideo(clipSource);
         if (sourceVideo) {
           try {
-            const captured = await captureVideoFrame(sourceVideo, usesLocalVideoTimeForClip(clip) ? time : timelineTime);
+            const captured = await captureVideoFrame(sourceVideo, mediaTimeForTimeline(clip, timelineTime, clipSource));
             if (captured) { src = captured; videoCaptured = true; }
           } catch (error) {
             console.warn(error);
@@ -5426,6 +5598,144 @@ function inlineReportComputedStyles(root) {
   });
 }
 
+function drawReportExportImage(context, image, width, height, fit = 'fill') {
+  const sourceWidth = Number(image?.naturalWidth || image?.width) || 0;
+  const sourceHeight = Number(image?.naturalHeight || image?.height) || 0;
+  if (!sourceWidth || !sourceHeight) return false;
+  if (fit === 'fill') {
+    context.drawImage(image, 0, 0, width, height);
+    return true;
+  }
+  const scale = fit === 'cover'
+    ? Math.max(width / sourceWidth, height / sourceHeight)
+    : Math.min(width / sourceWidth, height / sourceHeight);
+  const drawWidth = sourceWidth * scale;
+  const drawHeight = sourceHeight * scale;
+  context.drawImage(image, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+  return true;
+}
+
+function reportExportMediaCanvas(sourceElement, width = 1200, height = 900) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  const background = sourceElement ? getComputedStyle(sourceElement).backgroundColor : '';
+  context.fillStyle = background && background !== 'rgba(0, 0, 0, 0)' ? background : '#ffffff';
+  context.fillRect(0, 0, width, height);
+  return { canvas, context };
+}
+
+function replaceReportExportMedia(container, canvas, className, alt, fit) {
+  const image = document.createElement('img');
+  image.className = className;
+  image.alt = alt || '';
+  image.decoding = 'async';
+  image.src = canvas.toDataURL('image/png');
+  image.style.cssText = `width:100%;height:100%;display:block;object-fit:${fit};`;
+  container.replaceChildren(image);
+  return image;
+}
+
+async function flattenReportHeatmapForExport(sourcePlot, clonePlot) {
+  const sourceBase = sourcePlot?.querySelector('.report-heatmap-base-image');
+  const sourceOverlay = sourcePlot?.querySelector('.report-heatmap-canvas');
+  const cloneBase = clonePlot?.querySelector('.report-heatmap-base-image');
+  const cloneOverlay = clonePlot?.querySelector('.report-heatmap-canvas');
+  if (!sourcePlot || !clonePlot || !cloneBase || !cloneOverlay || sourceOverlay?.hidden) return;
+  await Promise.all([waitForReportImage(cloneBase), waitForReportImage(cloneOverlay)]);
+  if (!cloneBase.naturalWidth || !cloneOverlay.naturalWidth) return;
+
+  try {
+    const { canvas, context } = reportExportMediaCanvas(sourcePlot);
+    const baseStyle = sourceBase ? getComputedStyle(sourceBase) : null;
+    context.save();
+    if (baseStyle?.filter && baseStyle.filter !== 'none') context.filter = baseStyle.filter;
+    drawReportExportImage(context, cloneBase, canvas.width, canvas.height, baseStyle?.objectFit || 'cover');
+    context.restore();
+
+    const overlayStyle = sourceOverlay ? getComputedStyle(sourceOverlay) : null;
+    context.save();
+    const opacity = Number.parseFloat(overlayStyle?.opacity);
+    if (Number.isFinite(opacity)) context.globalAlpha = opacity;
+    const blendMode = overlayStyle?.mixBlendMode;
+    if (blendMode && blendMode !== 'normal') context.globalCompositeOperation = blendMode;
+    if (overlayStyle?.filter && overlayStyle.filter !== 'none') context.filter = overlayStyle.filter;
+    drawReportExportImage(context, cloneOverlay, canvas.width, canvas.height, 'fill');
+    context.restore();
+
+    const image = replaceReportExportMedia(
+      clonePlot,
+      canvas,
+      'report-heatmap-export-image',
+      cloneBase.alt || 'Thermal activity heat map',
+      'cover',
+    );
+    await waitForReportImage(image);
+  } catch (error) {
+    console.warn('Report export could not flatten a heat map', error);
+  }
+}
+
+async function flattenReportCaptureForExport(sourceMedia, cloneMedia) {
+  const cloneImage = cloneMedia?.querySelector(':scope > img');
+  if (!sourceMedia || !cloneMedia || !cloneImage) return;
+  await waitForReportImage(cloneImage);
+  if (!cloneImage.naturalWidth) return;
+
+  try {
+    const { canvas, context } = reportExportMediaCanvas(sourceMedia);
+    const sourceImage = sourceMedia.querySelector(':scope > img');
+    const imageStyle = sourceImage ? getComputedStyle(sourceImage) : null;
+    drawReportExportImage(context, cloneImage, canvas.width, canvas.height, imageStyle?.objectFit || 'contain');
+
+    const sourceRect = sourceMedia.getBoundingClientRect();
+    const outputScale = canvas.width / Math.max(1, sourceRect.width || 600);
+    sourceMedia.querySelectorAll('.report-capture-box').forEach((box) => {
+      const left = Number.parseFloat(box.style.left) / 100 * canvas.width;
+      const top = Number.parseFloat(box.style.top) / 100 * canvas.height;
+      const width = Number.parseFloat(box.style.width) / 100 * canvas.width;
+      const height = Number.parseFloat(box.style.height) / 100 * canvas.height;
+      if (![left, top, width, height].every(Number.isFinite)) return;
+      const boxStyle = getComputedStyle(box);
+      const lineWidth = Math.max(1, (Number.parseFloat(boxStyle.borderTopWidth) || 2) * outputScale);
+      context.save();
+      context.strokeStyle = 'rgba(255, 255, 255, .7)';
+      context.lineWidth = lineWidth + Math.max(1, outputScale);
+      context.strokeRect(left, top, width, height);
+      context.strokeStyle = boxStyle.borderTopColor || '#ff604f';
+      context.lineWidth = lineWidth;
+      context.strokeRect(left, top, width, height);
+      context.restore();
+    });
+
+    const image = replaceReportExportMedia(
+      cloneMedia,
+      canvas,
+      'report-capture-export-image',
+      cloneImage.alt || 'Thermal video frame with detection boxes',
+      'contain',
+    );
+    await waitForReportImage(image);
+  } catch (error) {
+    console.warn('Report export could not flatten a captured frame', error);
+  }
+}
+
+async function flattenReportMediaForExport(page, clone) {
+  const sourceHeatmaps = [...page.querySelectorAll('.report-heatmap-plot')];
+  const cloneHeatmaps = [...clone.querySelectorAll('.report-heatmap-plot')];
+  for (let index = 0; index < cloneHeatmaps.length; index += 1) {
+    await flattenReportHeatmapForExport(sourceHeatmaps[index], cloneHeatmaps[index]);
+  }
+
+  const sourceCaptures = [...page.querySelectorAll('.report-capture-media')];
+  const cloneCaptures = [...clone.querySelectorAll('.report-capture-media')];
+  for (let index = 0; index < cloneCaptures.length; index += 1) {
+    await flattenReportCaptureForExport(sourceCaptures[index], cloneCaptures[index]);
+  }
+}
+
 async function prepareReportExportClone(page, pageNumber, totalPages, exportStyles) {
   const clone = page.cloneNode(true);
   clone.classList.remove('report-page', 'report-page-last');
@@ -5462,6 +5772,11 @@ async function prepareReportExportClone(page, pageNumber, totalPages, exportStyl
     else image.removeAttribute('src');
     await waitForReportImage(image);
   }
+
+  // The normal print path can preserve live canvas layers, filters, and box
+  // overlays. The batch PDF path serializes through SVG, so flatten those
+  // layers first to guarantee the downloaded pages match the report preview.
+  await flattenReportMediaForExport(page, clone);
 
   // Print media queries are not active inside a data URI. Stage the clone in
   // the document with flattened print rules, then inline its computed styles
@@ -5839,24 +6154,34 @@ async function handleMultipleFiles(files) {
   const jsons = selectedJsons.length ? selectedJsons : (state.jsonFiles || []);
   if (!videos.length && !jsons.length) return showToast('Choose label JSON or video files', 'error');
   const importStartedAt = performance.now();
-  const pairs = buildImportPairs(videos, jsons);
   $('#save-state').textContent = `Reading ${jsons.length} JSON / ${videos.length} videos`;
   let sources = [];
   try {
-    sources = await Promise.all(videos.map((file, index) => inspectVideoSource(file, index)));
+    const [inspectedSources, parsedJsons] = await Promise.all([
+      Promise.all(videos.map((file, index) => inspectVideoSource(file, index))),
+      Promise.all(jsons.map(async (file) => ({ file, doc: normalizeDocument(JSON.parse(await file.text())) }))),
+    ]);
+    sources = inspectedSources;
+    const pairs = buildImportPairs(videos, jsons, parsedJsons.map((entry) => entry.doc));
+    const retainedSourceIndexes = [...new Set(pairs.map((pair) => pair.videoIndex).filter((index) => index != null))];
+    const compactSourceIndex = new Map(retainedSourceIndexes.map((sourceIndex, index) => [sourceIndex, index]));
+    inspectedSources.forEach((source, index) => {
+      if (!compactSourceIndex.has(index) && source.url) URL.revokeObjectURL(source.url);
+    });
+    sources = retainedSourceIndexes.map((sourceIndex, index) => ({ ...inspectedSources[sourceIndex], index }));
     const entries = [];
     for (const pair of pairs) {
-      const source = pair.videoIndex == null ? null : sources[pair.videoIndex];
+      const videoIndex = pair.videoIndex == null ? null : compactSourceIndex.get(pair.videoIndex);
+      const source = videoIndex == null ? null : sources[videoIndex];
       let doc;
       if (pair.json) {
-        const raw = JSON.parse(await pair.json.text());
-        doc = normalizeDocument(raw);
+        doc = parsedJsons[pair.jsonIndex]?.doc;
         if (!doc.frames.length && !source) throw new Error(`${pair.json.name} contains no frames`);
       } else if (source) {
         doc = createVideoOnlyDocument(source.file, source.duration, source.width, source.height);
       }
       if (!doc) continue;
-      entries.push({ doc, video: source, videoIndex: pair.videoIndex, jsonIndex: pair.jsonIndex, jsonName: pair.json?.name || '' });
+      entries.push({ doc, video: source, videoIndex, jsonIndex: pair.jsonIndex, jsonName: pair.json?.name || '' });
     }
     const merged = mergeImportedDocuments(entries);
     if (!merged?.frames?.length) throw new Error('The selected files produced no review frames');
@@ -5947,6 +6272,7 @@ async function handleFiles(fileList) {
       resetClipThumbnails();
       if (!video && state.videoFile && !videoMatchesDocument()) detachVideo();
       if (state.videoFile && videoMatchesDocument()) {
+        refreshVideoSourceTimelineKinds();
         const attachedVideo = $('#frame-video');
         reconcileDocumentVideo(state.doc, Number(attachedVideo.duration), attachedVideo.videoWidth, attachedVideo.videoHeight);
       }
@@ -5994,21 +6320,78 @@ function expectedVideoFileName() {
   return fileNameOnly(state.doc?.source_video || state.doc?.video?.source_video || '');
 }
 
+function documentSourceVideoFileNames(doc = state.doc) {
+  return [...new Set([
+    doc?.source_video,
+    doc?.video?.source_video,
+    doc?.input?.video,
+    doc?.outputs?.originalVideo,
+    doc?.outputs?.originalVideoInfo?.path,
+  ].map(fileNameOnly).filter(Boolean))];
+}
+
+function documentRenderedVideoFileNames(doc = state.doc) {
+  return [...new Set([
+    doc?.rendered_video,
+    doc?.video?.rendered_video,
+    doc?.outputs?.renderedVideo,
+    doc?.outputs?.renderedVideoInfo?.path,
+  ].map(fileNameOnly).filter(Boolean))];
+}
+
 function expectedVideoFileNames() {
   if (state.sourceJsonName === 'demo-labels.json') return [];
   const values = [
-    state.doc?.source_video,
-    state.doc?.video?.source_video,
-    state.doc?.rendered_video,
-    state.doc?.video?.rendered_video,
-    state.doc?.outputs?.renderedVideo,
-    state.doc?.outputs?.renderedVideoInfo?.path,
-  ].map(fileNameOnly).filter(Boolean);
+    ...documentSourceVideoFileNames(),
+    ...documentRenderedVideoFileNames(),
+  ];
   return [...new Set(values)];
 }
 
 function comparableVideoStem(value) {
   return fileNameOnly(value).replace(/\.[^.]+$/, '').replace(/[^a-z0-9]+/g, '');
+}
+
+function normalizedVideoTimelineKind(value) {
+  return value === 'source' || value === 'rendered' ? value : 'document';
+}
+
+function videoTimelineKind(file, doc = state.doc) {
+  const actualName = fileNameOnly(file?.name || file);
+  if (!actualName || !doc) return 'document';
+  const candidates = [
+    ...documentSourceVideoFileNames(doc).map((name) => ({ name, kind: 'source' })),
+    ...documentRenderedVideoFileNames(doc).map((name) => ({ name, kind: 'rendered' })),
+  ];
+  const exactName = candidates.find((candidate) => candidate.name === actualName);
+  if (exactName) return exactName.kind;
+  const actualStem = comparableVideoStem(actualName);
+  if (actualStem.length < 12) return 'document';
+  const scored = candidates.map((candidate) => {
+    const expectedStem = comparableVideoStem(candidate.name);
+    if (expectedStem.length < 12) return { ...candidate, score: 0 };
+    if (expectedStem === actualStem) return { ...candidate, score: 300000 + expectedStem.length };
+    if (actualStem.includes(expectedStem)) return { ...candidate, score: 200000 + expectedStem.length };
+    if (expectedStem.includes(actualStem)) return { ...candidate, score: 100000 - (expectedStem.length - actualStem.length) };
+    return { ...candidate, score: 0 };
+  }).filter((candidate) => candidate.score > 0).sort((left, right) => right.score - left.score);
+  return scored[0]?.kind || 'document';
+}
+
+function videoSourceTimelineKind(source, index = source?.index, doc = state.doc) {
+  const declaredSources = Array.isArray(doc?.video?.sources) ? doc.video.sources : [];
+  const declared = declaredSources.find((candidate) => validVideoSourceIndex(candidate?.index) === validVideoSourceIndex(index));
+  const classifiedKind = videoTimelineKind(source?.file || source?.name, doc);
+  if (classifiedKind !== 'document') return classifiedKind;
+  const declaredKind = normalizedVideoTimelineKind(declared?.timeline_kind);
+  if (declaredKind !== 'document') return declaredKind;
+  return normalizedVideoTimelineKind(source?.timeline_kind);
+}
+
+function refreshVideoSourceTimelineKinds(doc = state.doc) {
+  state.videoSources.forEach((source, index) => {
+    source.timeline_kind = videoSourceTimelineKind(source, index, doc);
+  });
 }
 
 function videoMatchesDocument(file = state.videoFile) {
@@ -6088,7 +6471,11 @@ async function inspectVideoSource(file, index) {
 
 async function attachVideoSources(sources, { preserveReport = false } = {}) {
   detachVideo();
-  state.videoSources = sources.map((source, index) => ({ ...source, index }));
+  state.videoSources = sources.map((source, index) => ({
+    ...source,
+    index,
+    timeline_kind: videoSourceTimelineKind(source, index),
+  }));
   state.videoFiles = state.videoSources.map((source) => source.file).filter(Boolean);
   state.activeVideoSourceIndex = state.videoSources.length ? 0 : null;
   const active = state.videoSources[0];
@@ -6137,7 +6524,16 @@ async function attachVideo(file, { createVideoDocument = false, preserveReport =
   state.videoFile = file;
   state.videoUrl = URL.createObjectURL(file);
   state.videoFiles = [file];
-  state.videoSources = [{ index: 0, file, url: state.videoUrl, name: file.name, duration: 0, width: 0, height: 0 }];
+  state.videoSources = [{
+    index: 0,
+    file,
+    url: state.videoUrl,
+    name: file.name,
+    duration: 0,
+    width: 0,
+    height: 0,
+    timeline_kind: videoTimelineKind(file),
+  }];
   state.activeVideoSourceIndex = 0;
   const attachmentToken = ++state.videoAttachmentToken;
   state.videoTargetTime = null;
@@ -6182,6 +6578,7 @@ async function attachVideo(file, { createVideoDocument = false, preserveReport =
       const clipRangesChanged = reconcileDocumentVideo(state.doc, duration, video.videoWidth, video.videoHeight);
       if (clipRangesChanged) resetClipThumbnails();
     }
+    refreshVideoSourceTimelineKinds();
     state.recoveryVideo = {
       name: file.name,
       type: file.type || '',

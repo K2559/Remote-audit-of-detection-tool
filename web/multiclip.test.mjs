@@ -14,24 +14,30 @@ const context = vm.createContext({
   requestAnimationFrame: (callback) => setTimeout(callback, 0),
 });
 
-vm.runInContext(`${source}\n;globalThis.auditTest = { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, buildImportPairs, mergeImportedDocuments, reviewSampleStep, sampleReviewFrames, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, canUseAdjacentSourceFrameAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, recoveryVideoDescriptors, recoveryVideoReattachPlan, heatmapBaseFrameSelection, heatmapBaseFrameSelectionKey, heatmapBaseFrameOptionSignature, heatmapShownFrameIndex, heatmapShownFrameTarget, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches, videoSourceIndexForFrame, usesLocalVideoTimeForFrame, videoTimeForFrame, sourceFrameRate, sourcePreviewClipTime, sourcePreviewTimeline, previewVideoTimeForFrame, canUseGlobalVideoCache, containedMediaRect, containedPointToPixels, containedPixelsToPercentStyle };`, context);
+vm.runInContext(`${source}\n;globalThis.auditTest = { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, buildImportPairs, mergeImportedDocuments, reviewSampleStep, sampleReviewFrames, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, videoTimelineKind, videoSourceTimelineKind, frameMediaTime, mediaTimeForTimeline, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, canUseAdjacentSourceFrameAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, scheduleVideoFramePrefetch, stopVideoFramePrefetch, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, recoveryVideoDescriptors, recoveryVideoReattachPlan, heatmapBaseFrameSelection, heatmapBaseFrameSelectionKey, heatmapBaseFrameOptionSignature, heatmapShownFrameIndex, heatmapShownFrameTarget, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches, videoSourceIndexForFrame, usesLocalVideoTimeForFrame, videoTimeForFrame, sourceFrameRate, sourceInspectionStepSeconds, sourceInspectionStepFrames, sourcePreviewClipTime, sourcePreviewTimeline, previewVideoTimeForFrame, canUseGlobalVideoCache, containedMediaRect, containedPointToPixels, containedPixelsToPercentStyle };`, context);
 
-const { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, buildImportPairs, mergeImportedDocuments, reviewSampleStep, sampleReviewFrames, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, canUseAdjacentSourceFrameAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, recoveryVideoDescriptors, recoveryVideoReattachPlan, heatmapBaseFrameSelection, heatmapBaseFrameSelectionKey, heatmapBaseFrameOptionSignature, heatmapShownFrameIndex, heatmapShownFrameTarget, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches, videoSourceIndexForFrame, usesLocalVideoTimeForFrame, videoTimeForFrame, sourceFrameRate, sourcePreviewClipTime, sourcePreviewTimeline, previewVideoTimeForFrame, canUseGlobalVideoCache, containedMediaRect, containedPointToPixels, containedPixelsToPercentStyle } = context.auditTest;
+const { state, normalizeDocument, createVideoOnlyDocument, reconcileDocumentVideo, buildImportPairs, mergeImportedDocuments, reviewSampleStep, sampleReviewFrames, clipTimepoints, nearestFrameInClip, nearestFrameIndexAtTimeline, firstFrameIndexForClip, lastFrameIndexForClip, clipTimebarPosition, rasterizeReportHeatmap, seekVideo, seekPresentedVideoFrame, waitForVideoFrameData, fileNameOnly, videoMatchesDocument, videoTimelineKind, videoSourceTimelineKind, frameMediaTime, mediaTimeForTimeline, detectVisualCutsFromSignatures, detectSceneCutsFromScores, createClipRangesFromCuts, clipBoundaryUpdate, mergeAdjacentClipRanges, isShortForwardAdvance, canUseAdjacentSourceFrameAdvance, sequentialPlaybackRate, preferLiveSequentialDecode, runHeldFrameNavigation, clipDetectionWorkerCount, frameCacheLimitForSize, trimVideoFrameCache, scheduleVideoFramePrefetch, stopVideoFramePrefetch, markFrame, createRecoverySnapshot, applyRecoveryCheckpoint, recoverySourceSignature, recoveryVideoDescriptors, recoveryVideoReattachPlan, heatmapBaseFrameSelection, heatmapBaseFrameSelectionKey, heatmapBaseFrameOptionSignature, heatmapShownFrameIndex, heatmapShownFrameTarget, boxesIntersect, resizeBoxFromHandle, collectBatchEraseMatches, videoSourceIndexForFrame, usesLocalVideoTimeForFrame, videoTimeForFrame, sourceFrameRate, sourceInspectionStepSeconds, sourceInspectionStepFrames, sourcePreviewClipTime, sourcePreviewTimeline, previewVideoTimeForFrame, canUseGlobalVideoCache, containedMediaRect, containedPointToPixels, containedPixelsToPercentStyle } = context.auditTest;
 assert.equal(state.report.tenderer, 'K-Solution Design and Engineering Limited', 'The report must start with the requested editable tenderer name');
 assert.equal(reviewSampleStep(), 10);
 assert.match(source, /function startFrameKeyNavigation\(event\)[\s\S]*?const step = 1;/, 'Arrow keys must always move one 10-second review sample');
 assert.doesNotMatch(source, /event\.shiftKey \? 10 : 1/, 'Shift must not turn arrow navigation into a 100-second jump');
 assert.match(source, /key === 'a' \|\| key === 'd'[\s\S]*?stepSourceVideoFrame/, 'A and D must use source-frame navigation');
 assert.match(source, /stepSourceVideoFrame[\s\S]*?renderFrame\(\{ exactSeek: true \}\)/, 'Fine frame navigation must bypass playback-based decoder advances');
+assert.match(source, /nextOffset = currentOffset \+ step \* sourceInspectionStepFrames\(\)/, 'A/D input must advance by the configured inspection interval');
 assert.match(source, /allowSequential && await playVideoForwardToTime/, 'Exact seeks must be able to disable sequential playback');
 assert.match(source, /!usesFrameCallback[\s\S]*?setTimeout\(\(\) => check\(performance\.now\(\)\), 8\)/, 'Fine stepping must have a media-clock fallback when frame callbacks are unavailable');
 assert.match(source, /showBusy = seeking && !state\.rapidFrameNavigation && !state\.fineFrameNavigation/, 'Fine stepping must keep the blocking loading overlay hidden');
-assert.match(source, /fineOffsets[\s\S]*?sourceFrameOffset\(originFrame\) \+ offset/, 'Fine stepping must warm adjacent source-frame cache entries');
+assert.match(source, /fineOffsets[\s\S]*?offset \* fineFrameStep[\s\S]*?sourceFrameOffset\(originFrame\) \+ offset/, 'Half-second stepping must warm matching cache entries');
 assert.match(source, /if \(sameRequestedFrame\) return state\.videoSeekPromise;[\s\S]*?beginFineFrameNavigation\(\)/, 'Repeated fine requests must join before replacing the active navigation token');
+assert.match(source, /if \(exactSeek\) stopVideoFramePrefetch\(\)/, 'Fine stepping must pause background decoding before a visible seek');
+assert.match(source, /scheduleVideoFramePrefetch\(video, state\.frameIndex, exactSeek \? VIDEO_PREFETCH_IDLE_DELAY_MS : 0\)/, 'Fine stepping must defer background decoding until the keypress is settled');
+assert.match(source, /let framePresented = false;[\s\S]*?framePresented = true;[\s\S]*?if \(framePresented\) {[\s\S]*?return true;[\s\S]*?showVideoError\('Frame could not be decoded'\)/, 'A displayed frame must not be mislabeled as a decode failure');
+assert.match(source, /const decoderCount = Math\.min\(2,/, 'Background prefetch must stay bounded to avoid competing with keyboard seeks');
+assert.match(source, /function stepSourceVideoFrame[\s\S]*?stopVideoFramePrefetch\(\)/, 'A/D input must cancel an active prefetch fill immediately');
 assert.match(source, /Math\.min\(video\.duration - 0\.001/, 'Heat-map captures must clamp terminal timestamps to a decodable frame');
 assert.doesNotMatch(source, /className = 'box-label'/, 'Review boxes must not render a group-name caption over the image');
 assert.doesNotMatch(css, /\.box-label\b/, 'Removed box captions must not retain obsolete styling');
-assert.match(html, /<kbd>A \/ D<\/kbd><span>Move one source frame<\/span>/, 'The shortcut reference must describe fine source-frame navigation');
+assert.match(html, /<kbd>A \/ D<\/kbd><span>Move 0\.5 seconds<\/span>/, 'The shortcut reference must describe half-second navigation');
 const letterboxed = containedMediaRect(1200, 900, 640, 360);
 assert.ok(Math.abs(letterboxed.top - 112.5) < 0.000001, '16:9 media should be vertically letterboxed in a 4:3 stage');
 assert.equal(letterboxed.left, 0);
@@ -81,8 +87,15 @@ state.doc = normalizeDocument({
 });
 const finePreviewFrame = state.doc.frames[1];
 assert.equal(sourceFrameRate(), 25);
+assert.equal(sourceInspectionStepSeconds(), 0.5, 'A/D navigation must use a half-second interval');
+assert.equal(sourceInspectionStepFrames(), 12.5, 'The half-second interval must be converted using the source frame rate');
+state.doc.sampling.source_fps = 30;
+assert.equal(sourceInspectionStepFrames(), 15, 'The same half-second interval must adapt to 30 fps source video');
+state.doc.sampling.source_fps = 25;
 assert.ok(Math.abs(previewVideoTimeForFrame({ duration: 60 }, finePreviewFrame, 1) - 10.04) < 0.000001, 'D must seek exactly one 25 fps source frame forward');
 assert.ok(Math.abs(previewVideoTimeForFrame({ duration: 60 }, finePreviewFrame, -1) - 9.96) < 0.000001, 'A must seek exactly one 25 fps source frame backward');
+assert.ok(Math.abs(previewVideoTimeForFrame({ duration: 60 }, finePreviewFrame, sourceInspectionStepFrames()) - 10.5) < 0.000001, 'D must seek half a second forward');
+assert.ok(Math.abs(previewVideoTimeForFrame({ duration: 60 }, finePreviewFrame, -sourceInspectionStepFrames()) - 9.5) < 0.000001, 'A must seek half a second backward');
 assert.ok(Math.abs(sourcePreviewClipTime(finePreviewFrame, 1) - 10.04) < 0.000001, 'Fine navigation must update the clip time readout');
 assert.ok(Math.abs(sourcePreviewTimeline(finePreviewFrame, 1) - 10.04) < 0.000001, 'Fine navigation must update the video timebar without changing the label sample');
 state.report.clips = state.doc.clips;
@@ -207,10 +220,26 @@ assert.match(html, /id="report-clip-list"/);
 assert.doesNotMatch(html, /report-clip-inspector|report-clip-time-slider|report-video-time-slider/, 'The redundant report clip inspector must stay removed');
 assert.match(source, /report-heatmap-source-select/, 'Every report clip must expose a heatmap background selector');
 assert.match(source, /report-heatmap-canvas/, 'Report heatmaps must render into a canvas overlay');
+assert.match(source, /class="report-heatmap-base-image"/, 'Only the report base frame should receive grayscale styling');
 assert.doesNotMatch(source, /report-heatmap-cells|report-heat-cell/, 'Report heatmaps must not regress to tiled DOM cells');
+const reportHeatmapBaseRule = css.match(/\.report-heatmap-plot\s*>\s*\.report-heatmap-base-image\s*\{[^}]*\}/)?.[0] || '';
+assert.match(reportHeatmapBaseRule, /filter:\s*grayscale\(1\)/, 'The source frame must remain grayscale');
+assert.doesNotMatch(css, /\.report-heatmap-plot\s*>\s*img\s*\{[^}]*filter:\s*grayscale\(1\)/, 'Exported heatmap overlay images must not be converted to grayscale');
+assert.deepEqual(Array.from(context.reportHeatRgb(0)), [0, 65, 255], 'Low-frequency report heat must start with a visible cobalt blue');
+assert.equal(context.reportHeatAlpha(0.005), 0, 'Very weak heatmap noise must remain transparent');
+assert.equal(context.reportHeatAlpha(0.02), 0, 'Long-clip background tails must remain transparent');
+assert.equal(context.reportHeatAlpha(0.15), 0, 'The report heat cutoff must stay transparent at the cutoff');
+assert.ok(context.reportHeatAlpha(0.2) > 0, 'Activity just above the cutoff must fade in visibly');
+assert.ok(context.reportHeatAlpha(0.5) > context.reportHeatAlpha(0.2), 'Heat opacity must increase with activity strength');
+assert.equal(context.reportHeatAlpha(1), 255, 'Peak heat must remain fully opaque before the shared overlay opacity is applied');
+assert.match(css, /\.report-heatmap-canvas\s*\{[^}]*opacity:\s*\.94/, 'Report and batch heatmaps must preserve the stronger overlay contrast');
 assert.match(source, /const sourceCanvases = \[\.\.\.page\.querySelectorAll\('canvas'\)\]/, 'Batch PDF export must copy pixels from live canvases before cloning');
 assert.match(source, /xmlns="\$\{xhtmlNamespace\}"/, 'Batch PDF export must serialize report pages in the XHTML namespace');
 assert.match(source, /await waitForReportImage\(image\)/, 'Batch PDF export must wait for embedded report images to decode');
+assert.match(source, /function flattenReportMediaForExport\(page, clone\)/, 'Batch PDF export must flatten report media before SVG rasterization');
+assert.match(source, /context\.globalCompositeOperation = blendMode/, 'Batch PDF export must preserve the color heatmap blend mode');
+assert.match(source, /sourceMedia\.querySelectorAll\('\.report-capture-box'\)/, 'Batch PDF export must flatten detection boxes with their source frame');
+assert.match(source, /await flattenReportMediaForExport\(page, clone\)/, 'Each batch PDF page must compose media layers before staging');
 assert.match(source, /const flattenRules = \(cssRules\) =>/, 'Batch PDF export must flatten print media rules for rasterization');
 assert.match(source, /function inlineReportComputedStyles\(root\)/, 'Batch PDF export must inline computed print styles');
 assert.match(source, /clone\.classList\.remove\('report-page', 'report-page-last'\)/, 'Batch PDF export must replace print-only page footer styling with its own numbered footer');
@@ -222,6 +251,8 @@ assert.doesNotMatch(source, /<th>Source frame<\/th>/, 'Per-clip count reports mu
 assert.doesNotMatch(source, />Appendix\s+[A-Z0-9]+</i, 'Generated report pages must not display appendix labels');
 assert.match(source, /pageIndex \+= pageIndex === 0 \? 1 : 2/, 'The tender-style first page must contain one image before two-image continuation pages');
 assert.match(source, /figure\.append\(media, caption\)/, 'Thermal-image captions must sit below their images');
+assert.doesNotMatch(source, /label\.textContent = 'Rodent'/, 'Report images must show boxes without label-name captions');
+assert.doesNotMatch(css, /\.report-capture-box\s*>\s*span/, 'Removed report box captions must not retain obsolete styling');
 assert.match(source, /function renderReportPreview\(\)/, 'Report preview sections must have a shared refresh path');
 assert.match(source, /state\.report\.selectedClipId = clip\.id;[\s\S]*?renderReportPreview\(\);/, 'Selecting a report clip must refresh its preview');
 assert.match(source, /const mode = state\.annotationTool === 'erase' \? 'erase' : 'draw';/, 'Empty review-stage drags must create boxes in Select mode');
@@ -268,7 +299,7 @@ assert.match(css, /\.box-resize-handle/);
 assert.match(css, /\.draw-cursor\.erase-preview/);
 assert.match(css, /\.erase-region-marker/);
 assert.match(css, /\.batch-erase-panel/);
-assert.match(css, /linear-gradient\(90deg, #151f7a[\s\S]*#d11f2a 100%\)/);
+assert.match(css, /linear-gradient\(90deg, #0041ff[\s\S]*#d11f2a 100%\)/, 'The report legend must match the more visible cobalt-to-red heatmap ramp');
 assert.doesNotMatch(css, /report-heat-spot/);
 assert.match(css, /\.report-document\s*\{[^}]*counter-reset:\s*report-page/);
 assert.match(css, /\.report-page::after\s*\{[^}]*content:\s*"Page " counter\(report-page\)/);
@@ -299,6 +330,70 @@ assert.deepEqual(
   Array.from(importPairs, (pair) => [pair.video?.name || null, pair.json?.name || null]),
   [['North Hall.mp4', 'North Hall_labels.json'], ['South Hall.mp4', 'South Hall_labels.json'], [null, 'Unmatched_labels.json']],
   'Multi-input imports must pair files by their normalized stems before falling back to order',
+);
+
+const producerJsonA = { name: 'camera-a_pilot21-screened-control_20260823.json' };
+const producerJsonB = { name: 'camera-b_pilot21-screened-control_20260823.json' };
+const producerDocA = {
+  input: { video: 'C:\\source\\camera-a.mp4' },
+  outputs: {
+    originalVideo: 'C:\\source\\camera-a.mp4',
+    renderedVideo: 'C:\\review\\camera-a_pilot21-screened-control_20260823.mp4',
+  },
+};
+const producerDocB = {
+  input: { video: 'C:\\source\\camera-b.mp4' },
+  outputs: {
+    originalVideo: 'C:\\source\\camera-b.mp4',
+    renderedVideo: 'C:\\review\\camera-b_pilot21-screened-control_20260823.mp4',
+  },
+};
+const missingMiddleLabelPairs = buildImportPairs(
+  [{ name: 'camera-a.mp4' }, { name: 'camera-without-label.mp4' }, { name: 'camera-b.mp4' }],
+  [producerJsonA, producerJsonB],
+  [producerDocA, producerDocB],
+);
+assert.deepEqual(
+  Array.from(missingMiddleLabelPairs, (pair) => [pair.video?.name || null, pair.json?.name || null]),
+  [
+    ['camera-a.mp4', producerJsonA.name],
+    ['camera-without-label.mp4', null],
+    ['camera-b.mp4', producerJsonB.name],
+  ],
+  'A missing JSON must create one video-only clip without shifting labels onto later videos',
+);
+const shuffledProducerPairs = buildImportPairs(
+  [{ name: 'camera-b.mp4' }, { name: 'camera-a.mp4' }],
+  [producerJsonA, producerJsonB],
+  [producerDocA, producerDocB],
+);
+assert.deepEqual(
+  Array.from(shuffledProducerPairs, (pair) => [pair.video?.name || null, pair.json?.name || null]),
+  [['camera-b.mp4', producerJsonB.name], ['camera-a.mp4', producerJsonA.name]],
+  'Producer metadata must make multi-file pairing independent of picker order',
+);
+const duplicateRenditionPairs = buildImportPairs(
+  [
+    { name: 'camera-a_pilot21-screened-control_20260823.mp4' },
+    { name: 'camera-a.mp4' },
+  ],
+  [producerJsonA],
+  [producerDocA],
+);
+assert.deepEqual(
+  Array.from(duplicateRenditionPairs, (pair) => [pair.video?.name || null, pair.json?.name || null]),
+  [['camera-a.mp4', producerJsonA.name]],
+  'When both renditions are selected, the JSON must use the original source and skip the redundant rendered clip',
+);
+const renderedOnlyPairs = buildImportPairs(
+  [{ name: 'camera-a_pilot21-screened-control_20260823.mp4' }],
+  [producerJsonA],
+  [producerDocA],
+);
+assert.deepEqual(
+  Array.from(renderedOnlyPairs, (pair) => [pair.video?.name || null, pair.json?.name || null]),
+  [['camera-a_pilot21-screened-control_20260823.mp4', producerJsonA.name]],
+  'The generated sparse-review MP4 must remain usable when it is the only selected rendition',
 );
 const mergedImport = mergeImportedDocuments([
   {
@@ -414,6 +509,37 @@ assert.equal(
   true,
   'Timestamped rendered MP4 exports must match the producer JSON',
 );
+const originalInferenceVideo = { name: 'Clip for Demonstration for Tender Ref. FEHQ 1020_25.mp4' };
+const renderedInferenceVideo = { name: 'Clip_for_Demonstration_for_Tender_Ref._FEHQ_1020_25_pilot21-screened-control_t0p3711_20260818_150107.mp4' };
+assert.equal(videoTimelineKind(originalInferenceVideo, inferenceOutputDocument), 'source', 'The original MP4 must use source timestamps');
+assert.equal(videoTimelineKind(renderedInferenceVideo, inferenceOutputDocument), 'rendered', 'A generated review MP4 must use output timestamps');
+const savedSourceDocument = JSON.parse(JSON.stringify(inferenceOutputDocument));
+savedSourceDocument.video.sources = [{ index: 0, timeline_kind: 'source' }];
+assert.equal(
+  videoSourceTimelineKind({ index: 0, ...renderedInferenceVideo }, 0, savedSourceDocument),
+  'rendered',
+  'A newly attached rendered MP4 must override the timeline kind remembered by a saved audit',
+);
+const inferenceFrame = inferenceOutputDocument.frames[0];
+const inferenceClip = inferenceOutputDocument.clips[0];
+const inferenceSourcesBeforeMediaTests = state.videoSources;
+state.videoSources = [{ index: 0, ...originalInferenceVideo, timeline_kind: 'source', duration: 30 }];
+assert.equal(frameMediaTime(inferenceFrame), 5, 'The first audited frame is five seconds into the original source');
+assert.equal(videoTimeForFrame({ duration: 30 }, inferenceFrame), 5, 'Review playback must seek the original video with the source clock');
+assert.ok(Math.abs(previewVideoTimeForFrame({ duration: 30 }, inferenceFrame, 1) - 5.04) < 0.000001, 'Fine stepping must stay anchored to the original source frame');
+assert.equal(mediaTimeForTimeline(inferenceClip, 10, state.videoSources[0]), 15, 'Report captures must translate audit time into source-video time');
+state.videoSources = [{ index: 0, ...renderedInferenceVideo, timeline_kind: 'rendered', duration: 30 }];
+assert.equal(frameMediaTime(inferenceFrame), 0, 'The generated review video keeps the first audited frame at zero seconds');
+assert.equal(videoTimeForFrame({ duration: 30 }, inferenceFrame), 0, 'Review playback must keep using output time for the generated MP4');
+assert.ok(Math.abs(previewVideoTimeForFrame({ duration: 30 }, inferenceFrame, 1) - 0.04) < 0.000001, 'Fine stepping must stay anchored to the generated review frame');
+assert.equal(mediaTimeForTimeline(inferenceClip, 10, state.videoSources[0]), 10, 'Report captures must preserve rendered-video time');
+state.videoSources = inferenceSourcesBeforeMediaTests;
+const reloadedInferenceDocument = normalizeDocument(JSON.parse(JSON.stringify(inferenceOutputDocument)));
+assert.deepEqual(
+  Array.from(reloadedInferenceDocument.frames, (frame) => [frame.timestamp_sec, frame.source_timestamp_sec]),
+  [[0, 5], [10, 15], [20, 25]],
+  'Saving and reopening a normalized audit must preserve its separate clocks',
+);
 
 const sparseDocument = normalizeDocument({
   source_video: 'sparse.mp4',
@@ -513,6 +639,26 @@ state.videoFrameCache.clear();
 state.videoFrameCacheLimit = 16;
 state.videoPrefetchDirection = 1;
 state.doc = cacheTestDocument;
+const prefetchState = {
+  doc: state.doc,
+  videoFile: state.videoFile,
+  playing: state.playing,
+  rapidFrameNavigation: state.rapidFrameNavigation,
+  view: state.view,
+};
+try {
+  stopVideoFramePrefetch();
+  state.doc = { frames: [{ timeline_sec: 0 }], clips: [{}] };
+  state.videoFile = { name: 'qa-thermal.mp4' };
+  state.playing = false;
+  state.rapidFrameNavigation = false;
+  state.view = 'review';
+  assert.doesNotThrow(() => scheduleVideoFramePrefetch({}, 0, 180), 'Scheduling delayed prefetch must not throw after a decoded frame is shown');
+  assert.equal(state.videoPrefetchQueuedDelay, 180, 'Delayed prefetch must retain the requested idle delay');
+} finally {
+  stopVideoFramePrefetch();
+  Object.assign(state, prefetchState);
+}
 assert.doesNotMatch(Function.prototype.toString.call(markFrame), /\brenderAll\s*\(/, 'Accept and next must not rebuild the full review page');
 assert.match(source, /addEventListener\('keyup', handleKeyup\)/, 'Arrow-key navigation must stop cleanly on key release');
 
