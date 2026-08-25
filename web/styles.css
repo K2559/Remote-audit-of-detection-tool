@@ -988,6 +988,7 @@ body * { letter-spacing: 0; }
 .report-count-sheet .report-count-table th:first-child,
 .report-count-sheet .report-count-table th:nth-child(2) { width: 50%; }
 .report-count-table + .report-note { max-width: 650px; margin-right: auto; margin-left: auto; }
+.report-count-continuation h3 { margin-top: 18px; }
 
 .report-annex-label { margin-bottom: 18px; color: #17221c; font-size: 12px; text-align: right; text-decoration: underline; text-underline-offset: 2px; }
 .report-heatmap-page h2 { max-width: 790px; margin-top: 14px; font-family: Georgia, 'Times New Roman', serif; font-size: 17px; }
@@ -1309,11 +1310,13 @@ body * { letter-spacing: 0; }
   .report-document { width: auto; }
   .report-sheet {
     width: 210mm;
+    height: 297mm;
     min-height: 297mm;
     margin: 0;
     padding: 12mm 13mm 11mm;
     border: 0;
     box-shadow: none;
+    overflow: hidden;
     break-after: page;
     page-break-after: always;
     print-color-adjust: exact;
@@ -1331,6 +1334,7 @@ body * { letter-spacing: 0; }
   .report-meta-grid > * { min-height: 7mm; }
   .report-table th, .report-table td { padding: 1.25mm 1.6mm; }
   .report-count-table th, .report-count-table td { padding: .8mm 1.6mm; }
+  .report-count-sheet { padding-bottom: 18mm; }
   .report-frequency-legend, .report-heatmap-band, .report-heatmap-frame { width: 166mm; }
   .report-heatmap-frame { min-height: 0; height: 104mm; padding: 5mm 20mm; }
   .report-heatmap-plot { width: 126mm; }

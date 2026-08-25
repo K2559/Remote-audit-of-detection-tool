@@ -5056,6 +5056,18 @@ function reportMetricState(value, threshold) {
   return value > threshold ? ['PASS', 'pass'] : ['FAIL', 'fail'];
 }
 
+const REPORT_COUNT_ROWS_PER_PAGE = 36;
+
+function chunkReportCountPoints(points, pageSize = REPORT_COUNT_ROWS_PER_PAGE) {
+  const rows = Array.from(points || []);
+  const safePageSize = Math.max(1, Math.floor(Number(pageSize) || REPORT_COUNT_ROWS_PER_PAGE));
+  const pages = [];
+  for (let index = 0; index < rows.length; index += safePageSize) {
+    pages.push(rows.slice(index, index + safePageSize));
+  }
+  return pages.length ? pages : [[]];
+}
+
 function renderReportSummaryPages() {
   const root = $('#report-summary-pages');
   if (!root) return;
@@ -5066,36 +5078,52 @@ function renderReportSummaryPages() {
     : state.sourceJsonName || state.videoFile?.name || 'Not entered';
 
   clips.forEach((clip) => {
-    const countPage = document.createElement('section');
-    countPage.className = 'report-sheet report-page report-count-sheet';
-    countPage.dataset.clipId = clip.id;
-    countPage.innerHTML = `
-      <div class="report-running-head"><strong>Thermal audit report</strong><span data-summary-clip></span></div>
-      <h2>${clip.name} count log</h2>
-      <div class="report-reference">Sampled every 2 minutes within this clip</div>
-      <div class="report-meta-grid report-meta-compact"><span>Clip coverage</span><strong data-summary-range></strong><span>Source label file</span><strong data-summary-source></strong></div>
-      <h3>Detection count by time point</h3>
-      <table class="report-table report-count-table"><thead><tr><th>Time in clip</th><th>Detections</th></tr></thead><tbody></tbody></table>
-      <p class="report-note" data-summary-note></p>`;
-    countPage.querySelector('[data-summary-clip]').textContent = `${clip.name} / ${formatClipClock(clip.start_sec)}-${formatClipClock(clip.end_sec)}`;
-    countPage.querySelector('[data-summary-range]').textContent = `${formatClipClock(clip.start_sec)} to ${formatClipClock(clip.end_sec)}`;
-    countPage.querySelector('[data-summary-source]').textContent = clip.source_json || sourceName;
-    const countBody = countPage.querySelector('tbody');
-    let missing = 0;
     const points = clipTimepoints(clip, 120);
-    points.forEach((time) => {
+    const countRows = points.map((time) => {
       const frame = nearestFrameInClip(clip, time, reportSampleTolerance());
-      if (!frame) missing += 1;
-      const row = document.createElement('tr');
-      const timeCell = document.createElement('td');
-      timeCell.textContent = formatClock(time);
-      const countCell = document.createElement('td');
-      countCell.textContent = frame ? String(frame.detections.length) : '-';
-      row.append(timeCell, countCell);
-      countBody.append(row);
+      return { time, frame };
     });
-    countPage.querySelector('[data-summary-note]').textContent = missing ? `${missing} of ${points.length} time points had no matching sampled label frame.` : `${points.length} time points matched sampled label frames. This page belongs only to ${clip.name}.`;
-    root.append(countPage);
+    const missing = countRows.filter(({ frame }) => !frame).length;
+    const pageRows = chunkReportCountPoints(countRows);
+
+    pageRows.forEach((rows, pageIndex) => {
+      const firstPage = pageIndex === 0;
+      const finalPage = pageIndex === pageRows.length - 1;
+      const countPage = document.createElement('section');
+      countPage.className = `report-sheet report-page report-count-sheet${firstPage ? '' : ' report-count-continuation'}`;
+      countPage.dataset.clipId = clip.id;
+      countPage.innerHTML = `
+        <div class="report-running-head"><strong>Thermal audit report</strong><span data-summary-clip></span></div>
+        <h2 data-summary-title></h2>
+        <div class="report-reference" data-summary-reference></div>
+        ${firstPage ? '<div class="report-meta-grid report-meta-compact"><span>Clip coverage</span><strong data-summary-range></strong><span>Source label file</span><strong data-summary-source></strong></div>' : ''}
+        <h3>Detection count by time point</h3>
+        <table class="report-table report-count-table"><thead><tr><th>Time in clip</th><th>Detections</th></tr></thead><tbody></tbody></table>
+        ${finalPage ? '<p class="report-note" data-summary-note></p>' : ''}`;
+      countPage.querySelector('[data-summary-clip]').textContent = `${clip.name} / ${formatClipClock(clip.start_sec)}-${formatClipClock(clip.end_sec)}`;
+      countPage.querySelector('[data-summary-title]').textContent = `${clip.name} count log${firstPage ? '' : ' (continued)'}`;
+      countPage.querySelector('[data-summary-reference]').textContent = pageRows.length > 1
+        ? `Sampled every 2 minutes within this clip - part ${pageIndex + 1} of ${pageRows.length}`
+        : 'Sampled every 2 minutes within this clip';
+      if (firstPage) {
+        countPage.querySelector('[data-summary-range]').textContent = `${formatClipClock(clip.start_sec)} to ${formatClipClock(clip.end_sec)}`;
+        countPage.querySelector('[data-summary-source]').textContent = clip.source_json || sourceName;
+      }
+      const countBody = countPage.querySelector('tbody');
+      rows.forEach(({ time, frame }) => {
+        const row = document.createElement('tr');
+        const timeCell = document.createElement('td');
+        timeCell.textContent = formatClock(time);
+        const countCell = document.createElement('td');
+        countCell.textContent = frame ? String(frame.detections.length) : '-';
+        row.append(timeCell, countCell);
+        countBody.append(row);
+      });
+      if (finalPage) {
+        countPage.querySelector('[data-summary-note]').textContent = missing ? `${missing} of ${points.length} time points had no matching sampled label frame.` : `${points.length} time points matched sampled label frames. This count log belongs only to ${clip.name}.`;
+      }
+      root.append(countPage);
+    });
   });
   updateReportPageBreaks();
 }
@@ -5576,7 +5604,7 @@ function reportExportStyles() {
       console.warn('Report export could not read a stylesheet', error);
     }
   }
-  return `${rules.join('\n')}\n.report-export-document{width:210mm;background:#fff;color:#000;}\n.report-export-document .report-sheet{width:210mm;height:297mm;min-height:297mm;max-width:none;margin:0;padding:12mm 13mm 11mm;border:0;box-shadow:none;overflow:hidden;box-sizing:border-box;}\n.report-export-document .report-page::after{display:none !important;content:none !important;}\n.report-export-page-number{position:absolute;right:13mm;bottom:6mm;color:#17221c;font-family:Georgia,'Times New Roman',serif;font-size:9pt;line-height:1;}\n.report-export-document .report-capture-page{padding-right:22mm;padding-left:22mm;}\n.report-export-document .report-capture-page .report-capture-media{width:125mm;}\n.report-export-document .report-heatmap-frame{width:166mm;min-height:0;height:104mm;padding:5mm 20mm;}\n.report-export-document .report-heatmap-plot{width:126mm;}\n.report-export-document .report-capture-list{gap:4mm;}\n.report-export-document .report-capture-continuation .report-capture-list{gap:12mm;}`;
+  return `${rules.join('\n')}\n.report-export-document{width:210mm;background:#fff;color:#000;}\n.report-export-document .report-sheet{width:210mm;height:297mm;min-height:297mm;max-width:none;margin:0;padding:12mm 13mm 11mm;border:0;box-shadow:none;overflow:hidden;box-sizing:border-box;}\n.report-export-document .report-count-sheet{padding-bottom:18mm;}\n.report-export-document .report-page::after{display:none !important;content:none !important;}\n.report-export-page-number{position:absolute;right:13mm;bottom:6mm;color:#17221c;font-family:Georgia,'Times New Roman',serif;font-size:9pt;line-height:1;}\n.report-export-document .report-capture-page{padding-right:22mm;padding-left:22mm;}\n.report-export-document .report-capture-page .report-capture-media{width:125mm;}\n.report-export-document .report-heatmap-frame{width:166mm;min-height:0;height:104mm;padding:5mm 20mm;}\n.report-export-document .report-heatmap-plot{width:126mm;}\n.report-export-document .report-capture-list{gap:4mm;}\n.report-export-document .report-capture-continuation .report-capture-list{gap:12mm;}`;
 }
 
 function reportImageDataUrl(blob) {
