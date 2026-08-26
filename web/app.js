@@ -3895,10 +3895,19 @@ function heatmapBaseFrameKey(frame, index = 0) {
   return String(frame?.sample_index ?? frame?.source_frame_index ?? index);
 }
 
+function heatmapStoredFrameSelection(clip) {
+  const clipKey = heatmapClipKey(clip);
+  const heatmapSelection = state.heatmapBaseFrameSelections?.[clipKey];
+  if (heatmapSelection != null && String(heatmapSelection) !== '') return String(heatmapSelection);
+  const reportSelections = state.report?.heatmapFrameSelections || {};
+  const reportKeys = [...new Set([clip?.id, clipKey].filter(Boolean).map(String))];
+  return reportKeys.map((key) => reportSelections[key]).find((value) => value != null && String(value) !== '') ?? '';
+}
+
 function heatmapBaseFrameSelection(clip) {
   const frames = heatmapFramesForClip(clip);
   if (!frames.length) return null;
-  const stored = state.heatmapBaseFrameSelections?.[heatmapClipKey(clip)];
+  const stored = heatmapStoredFrameSelection(clip);
   const storedIndex = frames.findIndex((frame, index) => heatmapBaseFrameKey(frame, index) === String(stored));
   if (storedIndex >= 0) return frames[storedIndex];
   const detectionIndex = frames.findIndex((frame) => Array.isArray(frame.detections) && frame.detections.length > 0);
@@ -4060,16 +4069,29 @@ function renderHeatmapBaseFrameControl(clip) {
   }
 }
 
-function setHeatmapBaseFrame(clip, value) {
+function synchronizeHeatmapFrameSelection(clip, value) {
   const frames = heatmapFramesForClip(clip);
   const selected = frames.find((frame, index) => heatmapBaseFrameKey(frame, index) === String(value));
-  if (!clip || !selected) return false;
+  if (!clip || !selected) return null;
   const clipKey = heatmapClipKey(clip);
   const selectedKey = heatmapBaseFrameKey(selected, frames.indexOf(selected));
   state.heatmapBaseFrameSelections[clipKey] = selectedKey;
+  state.report.heatmapFrameSelections ||= {};
+  [...new Set([clip?.id, clipKey].filter(Boolean).map(String))].forEach((key) => {
+    state.report.heatmapFrameSelections[key] = selectedKey;
+  });
+  return { clipKey, selected, selectedKey };
+}
+
+function setHeatmapBaseFrame(clip, value) {
+  const selection = synchronizeHeatmapFrameSelection(clip, value);
+  if (!selection) return false;
+  const { clipKey, selectedKey } = selection;
   state.heatmapBaseSurfaces.delete(clipKey);
   state.heatmapBaseCaptureRequests.delete(clipKey);
   state.heatmapBaseCaptureToken += 1;
+  delete state.report.heatmapImages[clipKey];
+  state.report.heatmapCaptureToken += 1;
   const select = $('#heatmap-base-frame-select');
   if (select) select.value = selectedKey;
   markDirty();
@@ -4750,9 +4772,7 @@ function renderReportClipSidebar() {
     heatmapSourceSelect.addEventListener('change', (event) => {
       const selectedFrame = heatmapFrames.find((frame, frameIndex) => reportHeatmapFrameKey(frame, frameIndex) === event.target.value);
       if (!selectedFrame) return;
-      state.report.heatmapFrameSelections[clip.id] = event.target.value;
-      delete state.report.heatmapImages[clip.id];
-      markDirty();
+      if (!setHeatmapBaseFrame(clip, event.target.value)) return;
       renderReportHeatmaps();
       void captureReportHeatmapFrame(clip, selectedFrame).then(() => renderReportHeatmaps());
     });
@@ -4818,7 +4838,7 @@ function reportHeatmapFrameKey(frame, index = 0) {
 function reportHeatmapFrameSelection(clip) {
   const frames = heatmapFramesForClip(clip);
   if (!frames.length) return null;
-  const stored = state.report.heatmapFrameSelections?.[clip.id];
+  const stored = heatmapStoredFrameSelection(clip);
   const storedIndex = frames.findIndex((frame, index) => reportHeatmapFrameKey(frame, index) === String(stored));
   if (storedIndex >= 0) return frames[storedIndex];
   const detectionIndex = frames.findIndex((frame) => Array.isArray(frame.detections) && frame.detections.length > 0);
