@@ -1,18 +1,17 @@
 # Remote Audit of Detection Tool
 
-This repository publishes the browser-based thermal detection review tool in
-`web/`. It runs entirely in the browser and supports importing a video and
-JSON detections, reviewing frames and clips, editing boxes, and exporting the
-reviewed annotations.
+- [RodentVision video and CSV audit](https://k2559.github.io/Remote-audit-of-detection-tool/csv/)
+- [Thermal Audit Desk for video and JSON annotations](https://k2559.github.io/Remote-audit-of-detection-tool/)
 
-## GitHub Pages
+## Audit a RodentVision CSV
 
-The workflow in `.github/workflows/deploy-pages.yml` publishes `web/` to
-GitHub Pages whenever `main` changes. The deployed site is expected at:
+1. In the desktop app, open **Report → Save CSV**. Drop the CSV and its source videos onto the audit page, or use **Choose files**. The page pairs clips to videos by filename, ignoring case and the video extension. Use **Attach video** to pair a clip manually.
+2. Select a clip and click an event time to jump to it. Use **Edit** to type a corrected elapsed time or copy the current playback position. Reviewers can add or remove events, change their type, and mark each clip reviewed.
+3. Select **RodentVision report CSV** and **Download CSV** to export the same two-column format as the desktop report. Select **Desktop import CSV** to send completed clips back through **Report → Import reviewed CSV** in the desktop app.
+4. Open **Report → Print / Save PDF** for a printable report.
 
-`https://k2559.github.io/Remote-audit-of-detection-tool/`
+The desktop report CSV marks dog occurrences with a suffix and omits the event type for other timestamps. Assign those event types in the browser before exporting a desktop import CSV. Pending clips stay in the report CSV and PDF and are skipped in the desktop import CSV. Save an export before closing the page to retain your edits. Files are read and exported locally in the browser. Playback uses the browser's supported video formats, such as H.264 MP4.
 
-## Local development
+## GitHub Pages and local development
 
-Open `web/index.html` directly, or serve the `web/` directory with any static
-HTTP server. No backend is required.
+The GitHub Actions workflow checks CSV compatibility and publishes the static `web/` directory on pushes to `main`. Run the audit locally with `python -m http.server 4173 --directory web` and open `http://127.0.0.1:4173/csv/`. Run the CSV tests with `node --test tests/csv.test.mjs`.
