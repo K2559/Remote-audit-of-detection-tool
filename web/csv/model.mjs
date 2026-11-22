@@ -146,12 +146,16 @@ export function reviewCsvIssue(clips) {
   return '';
 }
 
+export function compareClipNames(first, second) {
+  return clipDisplayName(first.name).localeCompare(clipDisplayName(second.name), undefined, { numeric: true });
+}
+
 export function reportRows(clips) {
-  return clips.map((clip) => {
+  return [...clips].sort(compareClipNames).map((clip) => {
     const lines = sortedEvents(clip).map((event) => formatTime(event.time) + (event.category === 'dog_presence' ? ' (dog)' : ''));
     if (!clip.reviewed) lines.push('REVIEW PENDING');
     return [clipDisplayName(clip.name), lines.join('\n') || 'NA'];
-  }).sort(([first], [second]) => first.localeCompare(second, undefined, { numeric: true }));
+  });
 }
 
 export function writeResults(clips, format) {

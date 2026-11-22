@@ -7,3 +7,4 @@ tmp/
 # The native auditor is a separate local application and may contain credentials.
 label_auditor/
 
+node_modules/

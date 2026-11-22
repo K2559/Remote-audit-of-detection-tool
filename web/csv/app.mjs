@@ -1,5 +1,5 @@
 import {
-  categories, clipKey, formatTime, newClip, parseTime, readResults,
+  categories, clipKey, compareClipNames, formatTime, newClip, parseTime, readResults,
   reportHeader, reportRows, reviewCsvIssue, sortedEvents, writeResults,
 } from './model.mjs';
 
@@ -109,7 +109,7 @@ function renderClips() {
   const list = $('clips');
   $('clip-count').textContent = state.clips.length;
   list.replaceChildren();
-  for (const clip of state.clips) {
+  for (const clip of [...state.clips].sort(compareClipNames)) {
     const row = button('', 'clip-row', () => {
       if (clip !== state.active) {
         selectClip(clip);
@@ -242,6 +242,18 @@ function refresh() {
 
 function renderReport() {
   const stack = $('report-pages');
+  $('print-report').disabled = true;
+  try {
+    renderReportPages(stack);
+    $('print-report').disabled = false;
+  } catch (error) {
+    stack.replaceChildren();
+    notice('Could not build the report preview. Open Report again to retry.', true);
+    console.error('Report preview failed:', error);
+  }
+}
+
+function renderReportPages(stack) {
   const master = $('report-page').content.firstElementChild.cloneNode(true);
   master.querySelectorAll('th').forEach((cell, index) => {
     cell.textContent = reportHeader[index];

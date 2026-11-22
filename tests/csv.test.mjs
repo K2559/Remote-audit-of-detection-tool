@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { clipKey, formatTime, parseTime, readResults, reportRows, reviewCsvIssue, writeResults } from '../web/csv/model.mjs';
+import { clipKey, compareClipNames, formatTime, newClip, parseTime, readResults, reportRows, reviewCsvIssue, writeResults } from '../web/csv/model.mjs';
 
 const report = '\uFEFF"Name of Video Clip","Time of the littering act / dog occurrence"\r\n'
   + '"Route, ""North""","00:01.125\n00:03 (dog)\nREVIEW PENDING"\r\n'
@@ -58,4 +58,10 @@ test('matches the desktop column values and natural clip order in the report CSV
   assert.equal(writeResults(clips, 'report'),
     '\uFEFF"Name of Video Clip","Time of the littering act / dog occurrence"\r\n'
     + '"2B","00:00.125\n00:02 (dog)\nREVIEW PENDING"\r\n"10B","NA"');
+});
+
+test('sorts video-only imports by filename with numeric order', () => {
+  const clips = ['4B.mp4', '11B.mp4', '6B.mp4', '24B.mp4', '1B.mp4', '3B.mp4'].map((name) => newClip(name));
+  assert.deepEqual(clips.sort(compareClipNames).map(({ name }) => name),
+    ['1B.mp4', '3B.mp4', '4B.mp4', '6B.mp4', '11B.mp4', '24B.mp4']);
 });

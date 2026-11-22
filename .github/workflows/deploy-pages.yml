@@ -27,6 +27,11 @@ jobs:
       - name: Check CSV compatibility
         run: node --test tests/csv.test.mjs
 
+      - name: Bundle the CSV audit page
+        run: |
+          npm ci
+          node scripts/bundle-csv-page.mjs web/csv/index.html
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
