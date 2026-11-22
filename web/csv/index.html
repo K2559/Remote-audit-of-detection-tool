@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#142b27">
+    <meta name="description" content="Review RodentVision video detections and export corrected timestamps.">
+    <title>RodentVision · Video audit</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="./style.css">
+    <script type="module" src="./app.mjs"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="shell topbar-inner">
+        <a class="brand" href="./" aria-label="RodentVision video audit home">
+          <span class="brand-mark" aria-hidden="true"><span></span></span>RodentVision
+        </a>
+        <nav aria-label="Audit views">
+          <button type="button" id="review-tab" aria-current="page">Review</button>
+          <button type="button" id="report-tab" disabled>Report</button>
+        </nav>
+        <a class="thermal-link" href="../">Thermal Audit Desk <span aria-hidden="true">↗</span></a>
+      </div>
+    </header>
+
+    <main class="shell">
+      <div class="page-heading">
+        <div>
+          <h1>Video audit</h1>
+          <p>Verify detection timestamps against the source clips.</p>
+        </div>
+        <div class="exports">
+          <label class="sr-only" for="export-format">CSV format</label>
+          <select id="export-format" disabled>
+            <option value="report">RodentVision report CSV</option>
+            <option value="review">Desktop import CSV</option>
+          </select>
+          <button type="button" class="button primary" id="download" disabled>Download CSV <span aria-hidden="true">↓</span></button>
+        </div>
+      </div>
+      <p class="notice" id="notice" role="status" aria-live="polite" hidden></p>
+
+      <section id="review-view" aria-label="Review workspace">
+        <section class="import-area" id="drop-zone" aria-label="Import files">
+          <span class="upload-mark" aria-hidden="true">↑</span>
+          <div>
+            <h2>Drop videos and a detection CSV</h2>
+            <p id="source-name">Files stay in this browser.</p>
+          </div>
+          <button type="button" class="button" id="open-files">Choose files</button>
+          <input type="file" id="files" multiple hidden accept="video/*,.mp4,.m4v,.mov,.webm,.ogv,.mkv,.avi,.csv">
+        </section>
+
+        <div class="workspace">
+          <aside class="panel clips-panel" aria-label="Clips">
+            <div class="panel-heading"><h2>Clips</h2><span class="count" id="clip-count">0</span></div>
+            <div id="clips" class="clip-list"><p class="empty">Imported clips will appear here.</p></div>
+          </aside>
+
+          <section class="panel player-panel" aria-label="Video playback">
+            <div class="panel-heading">
+              <h2 id="player-title">Source video</h2>
+              <button type="button" class="button compact" id="attach-video" hidden>Attach video</button>
+              <input type="file" id="video-file" hidden accept="video/*,.mp4,.m4v,.mov,.webm,.ogv,.mkv,.avi">
+            </div>
+            <div class="stage">
+              <video id="video" controls playsinline preload="metadata" hidden aria-label="Source video player"></video>
+              <div class="stage-empty" id="video-empty">
+                <span class="play-mark" aria-hidden="true">▶</span>
+                <strong id="video-message">No video loaded</strong>
+              </div>
+            </div>
+            <div class="player-tools">
+              <output class="clock" id="clock" aria-label="Playback position" aria-live="off">00:00 / —</output>
+              <button type="button" class="button compact" id="back" disabled aria-label="Back one second">−1 s</button>
+              <button type="button" class="button compact" id="forward" disabled aria-label="Forward one second">+1 s</button>
+            </div>
+          </section>
+
+          <section class="panel events-panel" aria-label="Event timestamps">
+            <div class="panel-heading"><h2>Events</h2><span class="count" id="event-count">0</span></div>
+            <div class="events-content">
+              <p class="empty" id="events-empty">Select a clip to review its timestamps.</p>
+              <div id="events" class="event-list"></div>
+              <button type="button" class="button add-event" id="add-event" hidden>+ Add event</button>
+              <form id="event-editor" hidden>
+                <h3 id="editor-title">Edit event</h3>
+                <label for="event-time">Elapsed time</label>
+                <div class="time-entry">
+                  <input id="event-time" type="text" autocomplete="off" placeholder="MM:SS" required>
+                  <button type="button" class="button compact" id="use-time">Use playhead</button>
+                </div>
+                <label for="event-type">Event type</label>
+                <select id="event-type">
+                  <option value="">Unspecified</option>
+                  <option value="pedestrian_littering">Pedestrian littering</option>
+                  <option value="vehicle_littering">Vehicle littering</option>
+                  <option value="bird_feeding">Bird feeding</option>
+                  <option value="dog_presence">Dog occurrence</option>
+                </select>
+                <p id="editor-error" class="editor-error" role="alert" hidden></p>
+                <div class="editor-actions">
+                  <button type="button" class="button danger" id="remove-event">Remove event</button>
+                  <button type="button" class="button" id="cancel-edit">Cancel</button>
+                  <button type="submit" class="button primary">Save</button>
+                </div>
+              </form>
+            </div>
+            <div class="review-actions">
+              <button type="button" class="button" id="toggle-review" disabled>Mark clip reviewed</button>
+            </div>
+          </section>
+        </div>
+      </section>
+      <section class="panel report-view" id="report-view" aria-label="Audit report" hidden>
+        <div class="panel-heading report-toolbar">
+          <h2>Report preview</h2>
+          <button type="button" class="button primary" id="print-report">Print / Save PDF</button>
+        </div>
+        <article class="report-paper">
+          <h2>RodentVision audit report</h2>
+          <p class="report-source" id="report-source"></p>
+          <p class="report-summary" id="report-summary"></p>
+          <table>
+            <thead><tr><th scope="col">Clip</th><th scope="col">Review status</th><th scope="col">Elapsed time</th><th scope="col">Event type</th></tr></thead>
+            <tbody id="report-rows"></tbody>
+          </table>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>
