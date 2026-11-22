@@ -95,12 +95,25 @@ h1 { font-size: clamp(2rem, 4vw, 2.65rem); font-weight: 740; line-height: 1.05; 
 .time-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px; }
 
 .report-view { max-width: 880px; margin-inline: auto; }
-.report-paper { padding: clamp(16px, 4vw, 44px); overflow-wrap: anywhere; }
-.report-paper h2 { font-size: 1.6rem; letter-spacing: -.02em; }
-.report-source, .report-summary { margin-top: 6px; color: var(--muted); }
-.report-paper table { width: 100%; margin-top: 21px; border-collapse: collapse; text-align: left; }
-.report-paper th, .report-paper td { padding: 8px; border: 1px solid var(--line); vertical-align: top; }
-.report-paper th { background: var(--soft); }
+.report-paper-stack { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 24px; padding: 24px 16px; }
+.report-paper {
+  width: 210mm;
+  height: 297mm;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 5mm;
+  padding: 15mm;
+  background: white;
+  color: #141414;
+  box-shadow: 0 3px 14px #19372f24;
+  zoom: var(--report-zoom, 1);
+}
+.report-paper h2 { font: bold 17pt "Times New Roman", serif; }
+.report-paper footer { font: 10pt "Times New Roman", serif; text-align: right; }
+.report-sheet-body table { width: 100%; border-collapse: collapse; table-layout: fixed; font: 11pt/1.35 "Times New Roman", serif; }
+.report-sheet-body th, .report-sheet-body td { border: 1px solid #353535; padding: 1.75mm 3mm; text-align: center; white-space: pre-line; overflow-wrap: anywhere; }
+.report-sheet-body th:first-child { width: 40%; }
+.report-measure { position: absolute; top: 0; left: -10000px; visibility: hidden; pointer-events: none; zoom: 1; }
 
 @media (max-width: 1090px) {
   .shell { width: calc(100% - 36px); }
@@ -123,13 +136,12 @@ h1 { font-size: clamp(2rem, 4vw, 2.65rem); font-weight: 740; line-height: 1.05; 
   .clip-list { grid-auto-columns: minmax(115px, 45%); }
 }
 
-@page { size: A4; margin: 15mm; }
 @media print {
-  body { color: #000; background: #fff; }
+  @page { size: A4 portrait; margin: 0; }
+  body { background: white; }
   .topbar, .page-heading, .notice, #review-view, .report-toolbar { display: none !important; }
   main.shell, .report-view { width: auto; max-width: none; margin: 0; padding: 0; border: 0; box-shadow: none; }
-  .report-paper { padding: 0; }
-  .report-paper thead { display: table-header-group; }
-  .report-paper tr { break-inside: avoid; }
-  .report-paper th, .report-paper td { border-color: #666; }
+  .report-paper-stack { display: block; padding: 0; }
+  .report-paper { zoom: 1; height: 296.8mm; box-shadow: none; break-inside: avoid; }
+  .report-paper + .report-paper { break-before: page; }
 }

@@ -5,11 +5,12 @@ export const categories = {
   dog_presence: 'Dog occurrence',
 };
 
-const reportHeader = ['Name of Video Clip', 'Time of the littering act / dog occurrence'];
+export const reportHeader = ['Name of Video Clip', 'Time of the littering act / dog occurrence'];
 const reviewHeader = ['clip_name', 'event_time', 'event_type'];
 const spreadsheetFormula = /^[\s]*[=+\-@]|^[\t\r\n]/;
 const videoExtension = /\.(mp4|m4v|mov|mkv|avi|webm|ogv)$/i;
-export const clipKey = (name) => name.trim().replace(videoExtension, '').toLowerCase();
+const clipDisplayName = (name) => name.trim().replace(videoExtension, '');
+export const clipKey = (name) => clipDisplayName(name).toLowerCase();
 
 export function parseTime(value) {
   const text = value.trim();
@@ -145,18 +146,23 @@ export function reviewCsvIssue(clips) {
   return '';
 }
 
+export function reportRows(clips) {
+  return clips.map((clip) => {
+    const lines = sortedEvents(clip).map((event) => formatTime(event.time) + (event.category === 'dog_presence' ? ' (dog)' : ''));
+    if (!clip.reviewed) lines.push('REVIEW PENDING');
+    return [clipDisplayName(clip.name), lines.join('\n') || 'NA'];
+  }).sort(([first], [second]) => first.localeCompare(second, undefined, { numeric: true }));
+}
+
 export function writeResults(clips, format) {
   const rows = format === 'review'
     ? [reviewHeader, ...clips.filter((clip) => clip.reviewed).flatMap((clip) => clip.events.length
       ? sortedEvents(clip).map((event) => [clip.name, formatTime(event.time), event.category])
       : [[clip.name, 'NA', '']])]
-    : [reportHeader, ...clips.map((clip) => {
-      const lines = sortedEvents(clip).map((event) => formatTime(event.time) + (event.category === 'dog_presence' ? ' (dog)' : ''));
-      if (!clip.reviewed) lines.push('REVIEW PENDING');
-      return [clip.name, lines.join('\n') || 'NA'];
-    })];
-  return rows.map((row) => row.map((value) => {
+    : [reportHeader, ...reportRows(clips)];
+  const csv = rows.map((row) => row.map((value) => {
     const safe = spreadsheetFormula.test(value) ? "'" + value : value;
     return '"' + safe.replaceAll('"', '""') + '"';
-  }).join(',')).join('\r\n') + '\r\n';
+  }).join(',')).join('\r\n');
+  return format === 'review' ? csv + '\r\n' : '\uFEFF' + csv;
 }
