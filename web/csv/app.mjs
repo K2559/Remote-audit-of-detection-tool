@@ -1,5 +1,6 @@
 import {
-  categories, clipKey, formatTime, newClip, parseTime, readResults, reviewCsvIssue, sortedEvents, writeResults,
+  categories, clipKey, formatTime, newClip, parseTime, readResults,
+  reportHeader, reportRows, reviewCsvIssue, sortedEvents, writeResults,
 } from './model.mjs';
 
 const $ = (id) => document.getElementById(id);
@@ -240,24 +241,58 @@ function refresh() {
 }
 
 function renderReport() {
-  const reviewed = state.clips.filter((clip) => clip.reviewed).length;
-  $('report-source').textContent = state.source;
-  $('report-source').hidden = !state.source;
-  $('report-summary').textContent = reviewed + ' of ' + state.clips.length + ' clips reviewed';
-  const report = $('report-rows');
-  report.replaceChildren();
-  for (const clip of state.clips) {
-    const events = sortedEvents(clip);
-    for (const event of events.length ? events : [null]) {
-      const row = document.createElement('tr');
-      const status = clip.reviewed ? 'Reviewed' : 'Review pending';
-      const time = event ? formatTime(event.time) : clip.reviewed ? 'NA' : '—';
-      const category = event ? categories[event.category] || 'Unspecified' : '—';
-      row.append(...[clip.name, status, time, category].map((value) => element('td', value)));
-      report.append(row);
+  const stack = $('report-pages');
+  const master = $('report-page').content.firstElementChild.cloneNode(true);
+  master.querySelectorAll('th').forEach((cell, index) => {
+    cell.textContent = reportHeader[index];
+  });
+  master.querySelector('footer').textContent = 'Page 1 of 1';
+
+  // Measure at actual A4 size so the same page breaks apply on screen and in the PDF.
+  const measure = master.cloneNode(true);
+  measure.classList.add('report-measure');
+  measure.setAttribute('aria-hidden', 'true');
+  const body = measure.querySelector('tbody');
+
+  for (const [clip, times] of reportRows(state.clips)) {
+    const lines = times.split('\n');
+    for (let start = 0; start < lines.length; start += 16) {
+      const name = start ? clip + ' (continued)' : clip;
+      body.insertRow().append(element('td', name), element('td', lines.slice(start, start + 16).join('\n')));
     }
   }
+
+  stack.replaceChildren(measure);
+  const header = measure.querySelector('thead').getBoundingClientRect().height;
+  const available = measure.querySelector('.report-sheet-body').getBoundingClientRect().height - header - 2;
+  const pages = [[]];
+  let used = 0;
+  for (const row of body.rows) {
+    const height = row.getBoundingClientRect().height;
+    if (used && used + height > available) {
+      pages.push([]);
+      used = 0;
+    }
+    pages.at(-1).push(row);
+    used += height;
+  }
+
+  const sheets = pages.map((rows, index) => {
+    const sheet = master.cloneNode(true);
+    sheet.querySelector('tbody').append(...rows);
+    sheet.setAttribute('aria-label', 'A4 page ' + (index + 1));
+    sheet.querySelector('footer').textContent = 'Page ' + (index + 1) + ' of ' + pages.length;
+    return sheet;
+  });
+  stack.replaceChildren(...sheets);
 }
+
+new ResizeObserver(([entry]) => {
+  const width = entry.target.firstElementChild?.offsetWidth;
+  if (width && entry.contentRect.width) {
+    entry.target.style.setProperty('--report-zoom', Math.min(1, entry.contentRect.width / width));
+  }
+}).observe($('report-pages'));
 
 function showReport(show) {
   if (show && state.editor) {

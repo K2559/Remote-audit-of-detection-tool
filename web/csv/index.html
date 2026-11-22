@@ -115,18 +115,22 @@
       </section>
       <section class="panel report-view" id="report-view" aria-label="Audit report" hidden>
         <div class="panel-heading report-toolbar">
-          <h2>Report preview</h2>
+          <h2>A4 preview</h2>
           <button type="button" class="button primary" id="print-report">Print / Save PDF</button>
         </div>
-        <article class="report-paper">
-          <h2>RodentVision audit report</h2>
-          <p class="report-source" id="report-source"></p>
-          <p class="report-summary" id="report-summary"></p>
-          <table>
-            <thead><tr><th scope="col">Clip</th><th scope="col">Review status</th><th scope="col">Elapsed time</th><th scope="col">Event type</th></tr></thead>
-            <tbody id="report-rows"></tbody>
-          </table>
-        </article>
+        <div class="report-paper-stack" id="report-pages"></div>
+        <template id="report-page">
+          <article class="report-paper">
+            <h2>Littering Act Report</h2>
+            <div class="report-sheet-body">
+              <table aria-label="Littering Act Report">
+                <thead><tr><th scope="col"></th><th scope="col"></th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <footer></footer>
+          </article>
+        </template>
       </section>
     </main>
   </body>

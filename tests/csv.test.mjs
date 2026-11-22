@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { clipKey, formatTime, parseTime, readResults, reviewCsvIssue, writeResults } from '../web/csv/model.mjs';
+import { clipKey, formatTime, parseTime, readResults, reportRows, reviewCsvIssue, writeResults } from '../web/csv/model.mjs';
 
 const report = '\uFEFF"Name of Video Clip","Time of the littering act / dog occurrence"\r\n'
   + '"Route, ""North""","00:01.125\n00:03 (dog)\nREVIEW PENDING"\r\n'
@@ -21,7 +21,7 @@ test('reads the desktop report and round-trips an edited time and review status'
   const updated = writeResults(clips, 'report');
   assert.match(updated, /"Route, ""North""","00:02\.375\n00:03 \(dog\)"/);
   assert.deepEqual(readResults(updated).map(({ name, reviewed }) => [name, reviewed]),
-    [['Route, "North"', true], ['Clip-B', true], ['Clip-C', false]]);
+    [['Clip-B', true], ['Clip-C', false], ['Route, "North"', true]]);
 });
 
 test('exports only reviewed clips in the format the desktop importer accepts', () => {
@@ -47,4 +47,15 @@ test('preserves elapsed precision and rejects malformed or conflicting data', ()
   assert.throws(() => readResults('clip_name,event_time,event_type\na,NA,\na,0,dog_presence'), /mixes NA/);
   assert.throws(() => readResults('clip_name,event_time,event_type\na,"0,dog_presence'), /unclosed quote/);
   assert.throws(() => readResults('clip_name,event_time,event_type\na,0,dog_presence\na,00:00,dog_presence'), /repeats an event/);
+});
+
+test('matches the desktop column values and natural clip order in the report CSV', () => {
+  const clips = readResults(
+    'clip_name,event_time,event_type\n10B.mp4,NA,\n2B.mov,2,dog_presence\n2B.mov,0.125,bird_feeding',
+  );
+  clips[1].reviewed = false;
+  assert.deepEqual(reportRows(clips), [['2B', '00:00.125\n00:02 (dog)\nREVIEW PENDING'], ['10B', 'NA']]);
+  assert.equal(writeResults(clips, 'report'),
+    '\uFEFF"Name of Video Clip","Time of the littering act / dog occurrence"\r\n'
+    + '"2B","00:00.125\n00:02 (dog)\nREVIEW PENDING"\r\n"10B","NA"');
 });
