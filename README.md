@@ -14,4 +14,4 @@ The desktop report CSV marks dog occurrences with a suffix and omits the event t
 
 ## GitHub Pages and local development
 
-The GitHub Actions workflow checks CSV compatibility and publishes the static `web/` directory on pushes to `main`. Run the audit locally with `python -m http.server 4173 --directory web` and open `http://127.0.0.1:4173/csv/`. Run the CSV tests with `node --test tests/csv.test.mjs`.
+The GitHub Actions workflow checks CSV compatibility and publishes the static `web/` directory on pushes to `video-csv-audit`. The detection review app remains on `main`. Run the audit locally with `python -m http.server 4173 --directory web` and open `http://127.0.0.1:4173/csv/`. Run the CSV tests with `node --test tests/csv.test.mjs`.
