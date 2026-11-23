@@ -5,7 +5,9 @@ export const categories = {
   dog_presence: 'Dog occurrence',
 };
 
-export const reportHeader = ['Name of Video Clip', 'Time of the littering act / dog occurrence'];
+const legacyReportHeader = ['Name of Video Clip', 'Time of the littering act / dog occurrence'];
+const elapsedReportHeader = ['Name of Video Clip', 'Event time (elapsed from clip start)'];
+const cameraReportHeader = ['Name of Video Clip', 'Event time (camera timestamp shown in video)'];
 const reviewHeader = ['clip_name', 'event_time', 'event_type'];
 export const isAnalysisCsv = (name) => /^RodentVision-analysis-results\.csv$/i.test(name);
 const spreadsheetFormula = /^[\s]*[=+\-@]|^[\t\r\n]/;
@@ -32,6 +34,21 @@ export function formatTime(seconds) {
   const fraction = String(ms % 1000).padStart(3, '0').replace(/0+$/, '');
   return (hours ? String(hours).padStart(2, '0') + ':' : '') + minutes + ':' + end
     + (fraction ? '.' + fraction : '');
+}
+
+export function parseCameraTimestamp(value) {
+  const stamp = value.trim().replace(' ', 'T');
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(stamp)) return NaN;
+  // Preserve the camera's displayed wall time across browser time zones.
+  const instant = new Date(stamp + 'Z');
+  return Number.isFinite(+instant) && instant.toISOString().slice(0, 19) === stamp ? +instant : NaN;
+}
+
+function formatCameraTimestamp(offsetMs, elapsedSeconds) {
+  const roundedMs = Math.round((offsetMs + elapsedSeconds * 1000) / 1000) * 1000;
+  const instant = new Date(roundedMs);
+  if (!Number.isFinite(+instant) || instant.getUTCFullYear() > 9999) return 'Unavailable';
+  return instant.toISOString().slice(0, 19).replace('T', ' ');
 }
 
 function parseCsv(text) {
@@ -73,7 +90,7 @@ function parseCsv(text) {
 }
 
 export function newClip(name, reviewed = false) {
-  return { name, key: clipKey(name), events: [], reviewed, file: null, duration: null };
+  return { name, key: clipKey(name), events: [], reviewed, file: null, duration: null, cameraOffsetMs: null };
 }
 
 export function sortedEvents(clip) {
@@ -84,7 +101,11 @@ export function readResults(text, { analysis = false } = {}) {
   const [header, ...rows] = parseCsv(text);
   const matchesHeader = (columns) => columns.length === header.length
     && columns.every((column, index) => column.toLowerCase() === header[index].toLowerCase());
-  const report = !analysis && matchesHeader(reportHeader);
+  const legacyReport = !analysis && matchesHeader(legacyReportHeader);
+  const report = legacyReport || (!analysis && matchesHeader(elapsedReportHeader));
+  if (matchesHeader(cameraReportHeader)) {
+    throw new Error('Import an analysis CSV, desktop import CSV, or report CSV using elapsed video time.');
+  }
   if (!report && !matchesHeader(reviewHeader)) {
     throw new Error(analysis
       ? 'The RodentVision analysis CSV must have the columns clip_name, event_time, event_type.'
@@ -103,7 +124,7 @@ export function readResults(text, { analysis = false } = {}) {
       throw new Error(label + ' needs a clip name and an event time, NA, or REVIEW PENDING.');
     }
     const existing = clips.get(key);
-    const clip = existing ?? newClip(name, !analysis);
+    const clip = existing ?? newClip(name, !analysis && (!report || legacyReport));
     if (report && existing) throw new Error(label + ' repeats the clip name ' + name + '.');
 
     if (times.toUpperCase() === 'NA') {
@@ -153,20 +174,27 @@ export function compareClipNames(first, second) {
   return clipDisplayName(first.name).localeCompare(clipDisplayName(second.name), undefined, { numeric: true });
 }
 
-export function reportRows(clips) {
+export function reportHeader(timeReference) {
+  return timeReference === 'camera' ? cameraReportHeader : elapsedReportHeader;
+}
+
+export function reportRows(clips, timeReference = 'elapsed') {
   return [...clips].sort(compareClipNames).map((clip) => {
-    const lines = sortedEvents(clip).map((event) => formatTime(event.time) + (event.category === 'dog_presence' ? ' (dog)' : ''));
-    if (!clip.reviewed) lines.push('REVIEW PENDING');
+    if (timeReference === 'camera' && clip.events.length && clip.cameraOffsetMs === null) {
+      return [clipDisplayName(clip.name), 'Unavailable'];
+    }
+    const lines = sortedEvents(clip).map(({ time }) => timeReference === 'camera'
+      ? formatCameraTimestamp(clip.cameraOffsetMs, time) : formatTime(time));
     return [clipDisplayName(clip.name), lines.join('\n') || 'NA'];
   });
 }
 
-export function writeResults(clips, format) {
+export function writeResults(clips, format, timeReference = 'elapsed') {
   const rows = format === 'review'
     ? [reviewHeader, ...clips.filter((clip) => clip.reviewed).flatMap((clip) => clip.events.length
       ? sortedEvents(clip).map((event) => [clip.name, formatTime(event.time), event.category])
       : [[clip.name, 'NA', '']])]
-    : [reportHeader, ...reportRows(clips)];
+    : [reportHeader(timeReference), ...reportRows(clips, timeReference)];
   const csv = rows.map((row) => row.map((value) => {
     const safe = spreadsheetFormula.test(value) ? "'" + value : value;
     return '"' + safe.replaceAll('"', '""') + '"';

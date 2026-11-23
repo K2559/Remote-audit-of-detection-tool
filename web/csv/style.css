@@ -39,7 +39,7 @@ main.shell { padding-block: 29px 38px; }
 .page-heading { display: flex; justify-content: space-between; align-items: flex-end; gap: 15px; margin-bottom: 22px; }
 h1 { font-size: clamp(2rem, 4vw, 2.65rem); font-weight: 740; line-height: 1.05; letter-spacing: -.045em; }
 .page-heading p { margin-top: 8px; color: var(--muted); }
-.exports, .editor-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.exports, .editor-actions, .report-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .button, select, input[type="text"] { min-height: 38px; padding: 0 11px; border: 1px solid #bdcfc5; border-radius: 7px; color: var(--ink); background: #fff; }
 .button { font-weight: 620; white-space: nowrap; }
 .button:hover:not(:disabled) { border-color: #758f83; background: var(--soft); }
@@ -77,6 +77,10 @@ h1 { font-size: clamp(2rem, 4vw, 2.65rem); font-weight: 740; line-height: 1.05; 
 .player-tools { display: flex; align-items: center; gap: 7px; padding: 8px 11px; }
 .clock, .event-time { font-variant-numeric: tabular-nums; }
 .clock { margin-right: auto; color: var(--muted); font-size: .86rem; }
+.camera-tools { padding: 0 11px 9px; }
+#camera-form { display: grid; gap: 6px; margin-top: 8px; }
+#camera-stamp { width: 15rem; max-width: 100%; }
+#camera-form label, .report-time-help { color: var(--muted); font-size: .86rem; }
 
 .events-content { display: grid; gap: 10px; padding: 12px; }
 .event-list { display: grid; gap: 6px; max-height: 19rem; overflow-y: auto; }
@@ -92,10 +96,14 @@ h1 { font-size: clamp(2rem, 4vw, 2.65rem); font-weight: 740; line-height: 1.05; 
 #event-editor { display: grid; gap: 7px; padding: 10px; background: #f6f9f6; border: 1px solid var(--line); border-radius: 7px; }
 #event-editor h3 { font-size: .97rem; }
 #event-editor label { font-size: .85rem; color: var(--muted); }
+#event-export-settings summary { cursor: pointer; font-size: .85rem; color: var(--muted); }
+#event-export-settings label { display: block; margin-block: 7px 4px; }
 #event-editor input, #event-editor select { min-width: 0; width: 100%; }
 .time-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px; }
 
 .report-view { max-width: 880px; margin-inline: auto; }
+.report-toolbar { flex-wrap: wrap; }
+.report-time-help { flex-basis: 100%; }
 .report-paper-stack { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 24px; padding: 24px 16px; }
 .report-paper {
   width: 210mm;

@@ -7,10 +7,10 @@
 
 1. Use the desktop app's automatic `RodentVision-analysis-results.csv` or a CSV saved with **Report → Save CSV**. Drop the CSV and source videos onto the audit page, use **Choose files**, or use **Choose output folder**. The page pairs clips to videos by filename, ignoring case and the video extension. Use **Attach video** to pair a clip manually.
 2. Select a clip and click an event time to jump to it. Use **Edit** to type a corrected elapsed time or copy the current playback position. Reviewers can add or remove events, change their type, and mark each clip reviewed.
-3. Select **RodentVision report CSV** and **Download CSV** to export the same two-column format as the desktop report. Select **Desktop import CSV** to send completed clips back through **Report → Import reviewed CSV** in the desktop app.
-4. Open **Report → Print / Save PDF** for the same paginated A4 Littering Act Report as the desktop app.
+3. In **Report**, choose **Elapsed video time** for positions measured from the start of each clip. For **Camera timestamp**, pause each source video in **Review**, select **Set camera timestamp**, and enter the date and time visible on that frame.
+4. Use **Print / Save PDF** or download a **Report CSV** to export the displayed times. Select **Desktop import CSV** to send completed clips back through **Report → Import reviewed CSV** in the desktop app.
 
-Clips from `RodentVision-analysis-results.csv` start as pending and include the detector's event types. Folder import looks for this filename first. The desktop report CSV marks dog occurrences with a suffix and omits the event type for other timestamps. Assign those event types in the browser before exporting a desktop import CSV. Pending clips stay in the report CSV and PDF and are skipped in the desktop import CSV. Save an export before closing the page to retain your edits. Files are read and exported locally in the browser. Playback uses the browser's supported video formats, such as H.264 MP4.
+Folder import looks for `RodentVision-analysis-results.csv` first. Reports list all imported and edited times. The desktop import CSV uses elapsed times and event types and includes clips marked reviewed. For events with a missing type, use **RodentVision export settings** in the event editor. Camera timestamps use the reference frame and the elapsed time between frames. Save an export before closing the page to retain your edits. Files are read and exported locally in the browser. Playback uses the browser's supported video formats, such as H.264 MP4.
 
 ## GitHub Pages and local development
 

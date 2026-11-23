@@ -28,12 +28,12 @@
       <div class="page-heading">
         <div>
           <h1>Video audit</h1>
-          <p>Verify detection timestamps against the source clips.</p>
+          <p>Check detected times against the source videos.</p>
         </div>
         <div class="exports">
           <label class="sr-only" for="export-format">CSV format</label>
           <select id="export-format" disabled>
-            <option value="report">RodentVision report CSV</option>
+            <option value="report">Report CSV</option>
             <option value="review">Desktop import CSV</option>
           </select>
           <button type="button" class="button primary" id="download" disabled>Download CSV <span aria-hidden="true">↓</span></button>
@@ -76,33 +76,48 @@
               </div>
             </div>
             <div class="player-tools">
-              <output class="clock" id="clock" aria-label="Playback position" aria-live="off">00:00 / —</output>
+              <output class="clock" id="clock" aria-label="Elapsed video time" aria-live="off">00:00 / —</output>
               <button type="button" class="button compact" id="back" disabled aria-label="Back one second">−1 s</button>
               <button type="button" class="button compact" id="forward" disabled aria-label="Forward one second">+1 s</button>
             </div>
+            <div class="camera-tools" id="camera-tools" hidden>
+              <button type="button" class="button compact" id="open-camera" aria-expanded="false" aria-controls="camera-form" disabled>Set camera timestamp</button>
+              <form id="camera-form" hidden>
+                <label for="camera-stamp" id="camera-frame">Date and time shown in the paused frame</label>
+                <div class="editor-actions">
+                  <input type="text" id="camera-stamp" autocomplete="off" placeholder="YYYY-MM-DD HH:MM:SS" required>
+                  <button type="submit" class="button compact primary">Save camera timestamp</button>
+                  <button type="button" class="button compact" id="cancel-camera">Cancel</button>
+                </div>
+                <p class="editor-error" id="camera-error" role="alert" hidden></p>
+              </form>
+            </div>
           </section>
 
-          <section class="panel events-panel" aria-label="Event timestamps">
-            <div class="panel-heading"><h2>Events</h2><span class="count" id="event-count">0</span></div>
+          <section class="panel events-panel" aria-label="Elapsed event times">
+            <div class="panel-heading"><h2>Event times from clip start</h2><span class="count" id="event-count">0</span></div>
             <div class="events-content">
               <p class="empty" id="events-empty">Select a clip to review its timestamps.</p>
               <div id="events" class="event-list"></div>
               <button type="button" class="button add-event" id="add-event" hidden>+ Add event</button>
               <form id="event-editor" hidden>
                 <h3 id="editor-title">Edit event</h3>
-                <label for="event-time">Elapsed time</label>
+                <label for="event-time">Elapsed video time</label>
                 <div class="time-entry">
                   <input id="event-time" type="text" autocomplete="off" placeholder="MM:SS" required>
                   <button type="button" class="button compact" id="use-time">Use playhead</button>
                 </div>
-                <label for="event-type">Event type</label>
-                <select id="event-type">
-                  <option value="">Unspecified</option>
-                  <option value="pedestrian_littering">Pedestrian littering</option>
-                  <option value="vehicle_littering">Vehicle littering</option>
-                  <option value="bird_feeding">Bird feeding</option>
-                  <option value="dog_presence">Dog occurrence</option>
-                </select>
+                <details id="event-export-settings">
+                  <summary>RodentVision export settings</summary>
+                  <label for="event-type">Event type for desktop import</label>
+                  <select id="event-type">
+                    <option value="">Unspecified</option>
+                    <option value="pedestrian_littering">Pedestrian littering</option>
+                    <option value="vehicle_littering">Vehicle littering</option>
+                    <option value="bird_feeding">Bird feeding</option>
+                    <option value="dog_presence">Dog occurrence</option>
+                  </select>
+                </details>
                 <p id="editor-error" class="editor-error" role="alert" hidden></p>
                 <div class="editor-actions">
                   <button type="button" class="button danger" id="remove-event">Remove event</button>
@@ -120,7 +135,15 @@
       <section class="panel report-view" id="report-view" aria-label="Audit report" hidden>
         <div class="panel-heading report-toolbar">
           <h2>A4 preview</h2>
-          <button type="button" class="button primary" id="print-report" disabled>Print / Save PDF</button>
+          <div class="report-actions">
+            <label for="report-time-reference">Report time reference</label>
+            <select id="report-time-reference" aria-describedby="report-time-help">
+              <option value="elapsed">Elapsed video time</option>
+              <option value="camera">Camera timestamp</option>
+            </select>
+            <button type="button" class="button primary" id="print-report" disabled>Print / Save PDF</button>
+          </div>
+          <p class="report-time-help" id="report-time-help">Elapsed video time starts at 00:00 for each clip.</p>
         </div>
         <div class="report-paper-stack" id="report-pages"></div>
         <template id="report-page">

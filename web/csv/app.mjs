@@ -1,5 +1,5 @@
 import {
-  categories, clipKey, compareClipNames, formatTime, isAnalysisCsv, newClip, parseTime, readResults,
+  clipKey, compareClipNames, formatTime, isAnalysisCsv, newClip, parseCameraTimestamp, parseTime, readResults,
   reportHeader, reportRows, reviewCsvIssue, sortedEvents, writeResults,
 } from './model.mjs';
 
@@ -36,8 +36,10 @@ function isVideo(file) {
 }
 
 function setFile(clip, file) {
+  if (clip.file === file) return;
   clip.file = file;
   clip.duration = null;
+  clip.cameraOffsetMs = null;
 }
 
 async function readResultCsv(csvFiles) {
@@ -81,7 +83,10 @@ async function importFiles(files) {
       const previous = new Map(state.clips.map((clip) => [clip.key, clip]));
       for (const clip of clips) {
         const match = previous.get(clip.key);
-        if (match?.file) setFile(clip, match.file);
+        if (match?.file) {
+          setFile(clip, match.file);
+          clip.cameraOffsetMs = match.cameraOffsetMs;
+        }
       }
       for (const clip of state.clips) {
         if (clip.file && !clips.some((candidate) => candidate.key === clip.key)) {
@@ -152,6 +157,7 @@ function selectClip(clip) {
   state.active = clip;
   state.pendingSeek = null;
   closeEditor();
+  closeCameraForm();
   refresh();
   player.pause();
   if (state.videoUrl) URL.revokeObjectURL(state.videoUrl);
@@ -162,6 +168,7 @@ function selectClip(clip) {
   $('player-title').textContent = clip?.file?.name || 'Source video';
   $('attach-video').hidden = !clip;
   $('attach-video').textContent = clip?.file ? 'Replace video' : 'Attach video';
+  $('camera-tools').hidden = !clip?.file;
   if (state.videoUrl) player.src = state.videoUrl;
   else player.removeAttribute('src');
   player.load();
@@ -173,6 +180,15 @@ function updatePlayback() {
   const ready = !player.hidden && Number.isFinite(player.duration);
   $('clock').textContent = ready ? formatTime(player.currentTime) + ' / ' + formatTime(player.duration) : '00:00 / —';
   for (const id of ['back', 'forward', 'use-time']) $(id).disabled = !ready;
+  $('open-camera').disabled = !ready || player.seeking;
+  $('open-camera').textContent = state.active?.cameraOffsetMs != null
+    ? 'Update camera timestamp' : 'Set camera timestamp';
+}
+
+function closeCameraForm() {
+  $('camera-form').hidden = true;
+  $('camera-error').hidden = true;
+  $('open-camera').setAttribute('aria-expanded', 'false');
 }
 
 function seek(time) {
@@ -207,7 +223,6 @@ function renderEvents() {
     jump.setAttribute('aria-label', 'Jump to ' + formatTime(event.time));
     jump.disabled = outOfRange;
     const info = element('div', '', 'event-info');
-    info.append(element('strong', categories[event.category] || 'Type unspecified'));
     if (outOfRange) info.append(element('small', 'Outside video duration', 'invalid-time'));
     else if (event.originalTime !== null && event.time !== event.originalTime) {
       info.append(element('small', 'Was ' + formatTime(event.originalTime)));
@@ -230,6 +245,7 @@ function openEditor(event = null) {
   $('editor-title').textContent = event ? 'Edit event' : 'Add event';
   $('event-time').value = event ? formatTime(event.time) : player.hidden ? '' : formatTime(playheadTime());
   $('event-type').value = event?.category ?? '';
+  $('event-export-settings').open = false;
   $('remove-event').hidden = !event;
   $('editor-error').hidden = true;
   $('event-time').focus();
@@ -267,9 +283,16 @@ function refresh() {
 
 function renderReport() {
   const stack = $('report-pages');
+  const reference = $('report-time-reference').value;
+  const missing = state.clips.filter((clip) => clip.events.length && clip.cameraOffsetMs === null).length;
+  $('report-time-help').textContent = reference === 'elapsed'
+    ? 'Elapsed video time starts at 00:00 for each clip.'
+    : missing
+      ? 'Set the camera timestamp in Review for ' + missing + (missing === 1 ? ' clip.' : ' clips.')
+      : 'Camera timestamps are calculated from the date and time shown in each clip.';
   $('print-report').disabled = true;
   try {
-    renderReportPages(stack);
+    renderReportPages(stack, reference);
     $('print-report').disabled = false;
   } catch (error) {
     stack.replaceChildren();
@@ -278,10 +301,11 @@ function renderReport() {
   }
 }
 
-function renderReportPages(stack) {
+function renderReportPages(stack, reference) {
   const master = $('report-page').content.firstElementChild.cloneNode(true);
+  const headerCells = reportHeader(reference);
   master.querySelectorAll('th').forEach((cell, index) => {
-    cell.textContent = reportHeader[index];
+    cell.textContent = headerCells[index];
   });
   master.querySelector('footer').textContent = 'Page 1 of 1';
 
@@ -291,7 +315,7 @@ function renderReportPages(stack) {
   measure.setAttribute('aria-hidden', 'true');
   const body = measure.querySelector('tbody');
 
-  for (const [clip, times] of reportRows(state.clips)) {
+  for (const [clip, times] of reportRows(state.clips, reference)) {
     const lines = times.split('\n');
     for (let start = 0; start < lines.length; start += 16) {
       const name = start ? clip + ' (continued)' : clip;
@@ -344,6 +368,7 @@ function showReport(show) {
   $('report-tab').setAttribute('aria-current', show ? 'page' : 'false');
   if (show) {
     player.pause();
+    closeCameraForm();
     renderReport();
   }
 }
@@ -363,9 +388,12 @@ function download() {
     notice(issue, true);
     return;
   }
-  const url = URL.createObjectURL(new Blob([writeResults(state.clips, format)], { type: 'text/csv;charset=utf-8' }));
+  const reference = $('report-time-reference').value;
+  const csv = writeResults(state.clips, format, reference);
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
   const anchor = document.createElement('a');
-  anchor.download = (state.source.replace(/\.csv$/i, '') || 'rodentvision') + (format === 'review' ? '-desktop-import.csv' : '-audited.csv');
+  const suffix = format === 'review' ? '-desktop-import.csv' : reference === 'camera' ? '-camera-timestamps.csv' : '-audited.csv';
+  anchor.download = (state.source.replace(/\.csv$/i, '') || 'rodentvision') + suffix;
   anchor.href = url;
   anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -431,12 +459,47 @@ player.addEventListener('loadedmetadata', () => {
   renderEvents();
 });
 player.addEventListener('timeupdate', updatePlayback);
+player.addEventListener('seeking', () => {
+  closeCameraForm();
+  updatePlayback();
+});
+player.addEventListener('seeked', updatePlayback);
+player.addEventListener('play', closeCameraForm);
 player.addEventListener('error', () => {
   if (!state.videoUrl || player.src !== state.videoUrl) return;
   player.hidden = true;
   $('video-empty').hidden = false;
   $('video-message').textContent = 'This browser could not play the video. Try an H.264 MP4.';
+  closeCameraForm();
   updatePlayback();
+});
+$('open-camera').addEventListener('click', () => {
+  player.pause();
+  $('camera-frame').textContent = 'Date and time shown at ' + formatTime(player.currentTime) + ' elapsed';
+  $('camera-stamp').value = '';
+  $('camera-error').hidden = true;
+  $('camera-form').hidden = false;
+  $('open-camera').setAttribute('aria-expanded', 'true');
+  $('camera-stamp').focus();
+});
+$('cancel-camera').addEventListener('click', () => {
+  closeCameraForm();
+  $('open-camera').focus();
+});
+$('camera-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const timestamp = parseCameraTimestamp($('camera-stamp').value);
+  if (!Number.isFinite(timestamp)) {
+    $('camera-error').textContent = 'Enter the date and time shown in the frame as YYYY-MM-DD HH:MM:SS.';
+    $('camera-error').hidden = false;
+    $('camera-stamp').focus();
+    return;
+  }
+  state.active.cameraOffsetMs = timestamp - Math.round(player.currentTime * 1000);
+  state.changed = true;
+  closeCameraForm();
+  updatePlayback();
+  $('open-camera').focus();
 });
 $('back').addEventListener('click', () => seek(player.currentTime - 1));
 $('forward').addEventListener('click', () => seek(player.currentTime + 1));
@@ -495,6 +558,7 @@ $('toggle-review').addEventListener('click', () => {
 });
 $('review-tab').addEventListener('click', () => showReport(false));
 $('report-tab').addEventListener('click', () => showReport(true));
+$('report-time-reference').addEventListener('change', renderReport);
 $('download').addEventListener('click', download);
 $('print-report').addEventListener('click', () => {
   const invalid = invalidClip(state.clips);

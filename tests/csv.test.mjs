@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  clipKey, compareClipNames, formatTime, isAnalysisCsv, newClip, parseTime,
+  clipKey, compareClipNames, formatTime, isAnalysisCsv, newClip, parseCameraTimestamp, parseTime,
   readResults, reportRows, reviewCsvIssue, writeResults,
 } from '../web/csv/model.mjs';
 
@@ -10,7 +10,7 @@ const report = '\uFEFF"Name of Video Clip","Time of the littering act / dog occu
   + '"Clip-B","NA"\r\n'
   + '"Clip-C","REVIEW PENDING"\r\n';
 
-test('reads the desktop report and round-trips an edited time and review status', () => {
+test('imports legacy review status and round-trips elapsed report times', () => {
   const clips = readResults(report);
   const [north, empty, pending] = clips;
   assert.equal(clipKey('ROUTE, "NORTH".MP4'), north.key);
@@ -22,9 +22,11 @@ test('reads the desktop report and round-trips an edited time and review status'
   north.events[0].time = 2.375;
   north.reviewed = true;
   const updated = writeResults(clips, 'report');
-  assert.match(updated, /"Route, ""North""","00:02\.375\n00:03 \(dog\)"/);
-  assert.deepEqual(readResults(updated).map(({ name, reviewed }) => [name, reviewed]),
-    [['Clip-B', true], ['Clip-C', false], ['Route, "North"', true]]);
+  assert.match(updated, /"Route, ""North""","00:02\.375\n00:03"/);
+  assert.doesNotMatch(updated, /REVIEW PENDING|\(dog\)/);
+  const [clipB, clipC, route] = readResults(updated);
+  assert.deepEqual([clipB.name, clipC.name, route.name], ['Clip-B', 'Clip-C', 'Route, "North"']);
+  assert.deepEqual(route.events.map(({ time }) => time), [2.375, 3]);
 });
 
 test('exports only reviewed clips in the format the desktop importer accepts', () => {
@@ -52,15 +54,15 @@ test('preserves elapsed precision and rejects malformed or conflicting data', ()
   assert.throws(() => readResults('clip_name,event_time,event_type\na,0,dog_presence\na,00:00,dog_presence'), /repeats an event/);
 });
 
-test('matches the desktop column values and natural clip order in the report CSV', () => {
+test('labels elapsed times and preserves natural clip order in the report CSV', () => {
   const clips = readResults(
     'clip_name,event_time,event_type\n10B.mp4,NA,\n2B.mov,2,dog_presence\n2B.mov,0.125,bird_feeding',
   );
   clips[1].reviewed = false;
-  assert.deepEqual(reportRows(clips), [['2B', '00:00.125\n00:02 (dog)\nREVIEW PENDING'], ['10B', 'NA']]);
+  assert.deepEqual(reportRows(clips), [['2B', '00:00.125\n00:02'], ['10B', 'NA']]);
   assert.equal(writeResults(clips, 'report'),
-    '\uFEFF"Name of Video Clip","Time of the littering act / dog occurrence"\r\n'
-    + '"2B","00:00.125\n00:02 (dog)\nREVIEW PENDING"\r\n"10B","NA"');
+    '\uFEFF"Name of Video Clip","Event time (elapsed from clip start)"\r\n'
+    + '"2B","00:00.125\n00:02"\r\n"10B","NA"');
 });
 
 test('sorts video-only imports by filename with numeric order', () => {
@@ -84,8 +86,8 @@ test('reads the detector folder report format with pending rows and duplicate ti
   assert.deepEqual(reportRows(clips), [
     ['1B', '00:10\n00:10'],
     ['2B', 'NA'],
-    ['3B', 'REVIEW PENDING'],
-    ['23B', '00:18 (dog)'],
+    ['3B', 'NA'],
+    ['23B', '00:18'],
   ]);
 });
 
@@ -108,4 +110,17 @@ test('imports the automatic detector export as pending candidates', () => {
   clips[2].reviewed = true;
   assert.equal(writeResults(clips, 'review'),
     '"clip_name","event_time","event_type"\r\n"3B.mp4","03:01","dog_presence"\r\n');
+});
+
+test('computes camera timestamps from each clip’s reference frame across midnight', () => {
+  const clips = readResults('clip_name,event_time,event_type\n2B.mp4,12,dog_presence\n1B.mp4,10,bird_feeding\n3B.mp4,NA,');
+  clips[0].cameraOffsetMs = parseCameraTimestamp('2025-04-21 23:59:58') - 8000;
+  assert.deepEqual(reportRows(clips, 'camera'), [
+    ['1B', 'Unavailable'],
+    ['2B', '2025-04-22 00:00:02'],
+    ['3B', 'NA'],
+  ]);
+  assert.match(writeResults(clips, 'report', 'camera'), /"Event time \(camera timestamp shown in video\)"/);
+  assert.equal(writeResults(clips, 'review', 'camera'), writeResults(clips, 'review', 'elapsed'));
+  assert.ok(Number.isNaN(parseCameraTimestamp('2025-02-29 11:00:00')));
 });
