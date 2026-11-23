@@ -40,20 +40,42 @@ function setFile(clip, file) {
   clip.duration = null;
 }
 
+async function readResultCsv(files) {
+  const csvFiles = files.filter((file) => /\.csv$/i.test(file.name));
+  if (!csvFiles.length) return null;
+  const parsed = [];
+  let firstError;
+  for (const file of csvFiles) {
+    try {
+      parsed.push({ file, clips: readResults(await file.text()) });
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  if (!parsed.length) throw (firstError || new Error('No compatible RodentVision report CSV was found.'));
+  if (parsed.length === 1) return parsed[0];
+  const preferred = parsed.filter(({ file }) => /(report|result|analysis)/i.test(file.name));
+  if (preferred.length === 1) return preferred[0];
+  throw new Error('Found multiple compatible CSV files. Choose the RodentVision report CSV separately.');
+}
+
 async function importFiles(files) {
   if (state.importing || !files.length) return;
-  const csv = files.filter((file) => /\.csv$/i.test(file.name));
+  const csvFiles = files.filter((file) => /\.csv$/i.test(file.name));
   const videos = files.filter(isVideo);
-  if (csv.length > 1 || !(csv.length || videos.length)) {
-    notice('Choose one CSV at a time and any matching videos.', true);
+  if (!(csvFiles.length || videos.length)) {
+    notice('Choose a RodentVision CSV, source videos, or an output folder.', true);
     return;
   }
 
   state.importing = true;
   $('open-files').disabled = true;
+  $('open-folder').disabled = true;
   try {
-    if (csv.length) {
-      const clips = readResults(await csv[0].text());
+    const result = await readResultCsv(files);
+    const csv = result?.file;
+    if (result) {
+      const clips = result.clips;
       if (state.changed && !window.confirm('Replace the current audit with this CSV?')) return;
       const previous = new Map(state.clips.map((clip) => [clip.key, clip]));
       for (const clip of clips) {
@@ -68,7 +90,7 @@ async function importFiles(files) {
         }
       }
       state.clips = clips;
-      state.source = csv[0].name;
+      state.source = csv.name;
       state.changed = false;
     }
 
@@ -92,16 +114,18 @@ async function importFiles(files) {
       if (!clip) state.clips.push(target);
     }
 
-    $('source-name').textContent = state.source || 'Files stay in this browser.';
+    $('source-name').textContent = state.source
+      || 'Files stay in this browser. Choose the detector output folder to load its CSV and videos.';
     notice(conflicts.length ? 'More than one video matches a clip. Use Attach video to choose: ' + conflicts.join(' / ') : '', !!conflicts.length);
     const active = state.clips.find((clip) => clip.key === state.active?.key);
-    selectClip((csv.length && !active?.file
+    selectClip((csv && !active?.file
       ? state.clips.find((clip) => clip.file) : active) ?? state.clips[0]);
   } catch (error) {
     notice(error.message, true);
   } finally {
     state.importing = false;
     $('open-files').disabled = false;
+    $('open-folder').disabled = false;
   }
 }
 
@@ -349,6 +373,11 @@ function download() {
 
 $('open-files').addEventListener('click', () => $('files').click());
 $('files').addEventListener('change', (event) => {
+  void importFiles([...event.target.files]);
+  event.target.value = '';
+});
+$('open-folder').addEventListener('click', () => $('folder').click());
+$('folder').addEventListener('change', (event) => {
   void importFiles([...event.target.files]);
   event.target.value = '';
 });

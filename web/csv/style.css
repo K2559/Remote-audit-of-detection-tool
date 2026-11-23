@@ -54,7 +54,8 @@ h1 { font-size: clamp(2rem, 4vw, 2.65rem); font-weight: 740; line-height: 1.05; 
 .import-area.dragging { border-color: #225d4a; box-shadow: 0 0 0 2px #225d4a; background: #d9eee1; }
 .import-area h2 { font-size: 1rem; }
 .import-area p { margin-top: 3px; color: var(--muted); font-size: .86rem; overflow-wrap: anywhere; }
-.import-area .button { margin-left: auto; }
+.import-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.import-area .button { margin-left: 0; }
 .upload-mark { flex: 0 0 36px; display: grid; place-items: center; height: 36px; border-radius: 8px; background: white; color: var(--brand); font-size: 21px; line-height: 1; }
 
 .workspace { display: grid; grid-template-columns: minmax(155px, .74fr) minmax(0, 2.45fr) minmax(290px, 1.15fr); gap: 14px; margin-top: 16px; align-items: start; }
@@ -131,7 +132,7 @@ h1 { font-size: clamp(2rem, 4vw, 2.65rem); font-weight: 740; line-height: 1.05; 
   .page-heading { align-items: start; flex-direction: column; }
   .import-area { padding: 9px; gap: 8px; flex-wrap: wrap; }
   .upload-mark { display: none; }
-  .import-area .button { margin-left: 0; }
+  .import-actions { margin-left: 0; }
   .workspace { grid-template-columns: minmax(0, 1fr); }
   .clip-list { grid-auto-columns: minmax(115px, 45%); }
 }

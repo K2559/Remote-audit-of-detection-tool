@@ -65,3 +65,23 @@ test('sorts video-only imports by filename with numeric order', () => {
   assert.deepEqual(clips.sort(compareClipNames).map(({ name }) => name),
     ['1B.mp4', '3B.mp4', '4B.mp4', '6B.mp4', '11B.mp4', '24B.mp4']);
 });
+
+test('reads the detector folder report format with pending rows and duplicate timestamps', () => {
+  const clips = readResults(
+    '\uFEFF"Name of Video Clip","Time of the littering act / dog occurrence"\r\n'
+    + '"1B","00:10\n00:10"\r\n'
+    + '"2B","NA"\r\n'
+    + '"3B","REVIEW PENDING"\r\n'
+    + '"23B","00:18 (dog)"\r\n',
+  );
+  assert.equal(clips.length, 4);
+  assert.deepEqual(clips[0].events.map(({ time, category }) => [time, category]),
+    [[10, ''], [10, '']]);
+  assert.equal(clips[2].reviewed, false);
+  assert.deepEqual(reportRows(clips), [
+    ['1B', '00:10\n00:10'],
+    ['2B', 'NA'],
+    ['3B', 'REVIEW PENDING'],
+    ['23B', '00:18 (dog)'],
+  ]);
+});

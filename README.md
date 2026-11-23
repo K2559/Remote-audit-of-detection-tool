@@ -5,7 +5,7 @@
 
 ## Audit a RodentVision CSV
 
-1. In the desktop app, open **Report → Save CSV**. Drop the CSV and its source videos onto the audit page, or use **Choose files**. The page pairs clips to videos by filename, ignoring case and the video extension. Use **Attach video** to pair a clip manually.
+1. In the desktop app, open **Report → Save CSV**. Drop the CSV and its source videos onto the audit page, use **Choose files**, or use **Choose output folder** to select the folder containing the detector CSV and videos. The page pairs clips to videos by filename, ignoring case and the video extension. Use **Attach video** to pair a clip manually.
 2. Select a clip and click an event time to jump to it. Use **Edit** to type a corrected elapsed time or copy the current playback position. Reviewers can add or remove events, change their type, and mark each clip reviewed.
 3. Select **RodentVision report CSV** and **Download CSV** to export the same two-column format as the desktop report. Select **Desktop import CSV** to send completed clips back through **Report → Import reviewed CSV** in the desktop app.
 4. Open **Report → Print / Save PDF** for the same paginated A4 Littering Act Report as the desktop app.

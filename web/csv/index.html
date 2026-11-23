@@ -46,10 +46,14 @@
           <span class="upload-mark" aria-hidden="true">↑</span>
           <div>
             <h2>Drop videos and a detection CSV</h2>
-            <p id="source-name">Files stay in this browser.</p>
+            <p id="source-name">Files stay in this browser. Choose the detector output folder to load its CSV and videos.</p>
           </div>
-          <button type="button" class="button" id="open-files">Choose files</button>
+          <div class="import-actions">
+            <button type="button" class="button" id="open-files">Choose files</button>
+            <button type="button" class="button" id="open-folder">Choose output folder</button>
+          </div>
           <input type="file" id="files" multiple hidden accept="video/*,.mp4,.m4v,.mov,.webm,.ogv,.mkv,.avi,.csv">
+          <input type="file" id="folder" webkitdirectory directory multiple hidden>
         </section>
 
         <div class="workspace">
