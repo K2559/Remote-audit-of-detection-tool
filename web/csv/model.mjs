@@ -7,6 +7,7 @@ export const categories = {
 
 export const reportHeader = ['Name of Video Clip', 'Time of the littering act / dog occurrence'];
 const reviewHeader = ['clip_name', 'event_time', 'event_type'];
+export const isAnalysisCsv = (name) => /^RodentVision-analysis-results\.csv$/i.test(name);
 const spreadsheetFormula = /^[\s]*[=+\-@]|^[\t\r\n]/;
 const videoExtension = /\.(mp4|m4v|mov|mkv|avi|webm|ogv)$/i;
 const clipDisplayName = (name) => name.trim().replace(videoExtension, '');
@@ -79,13 +80,15 @@ export function sortedEvents(clip) {
   return [...clip.events].sort((a, b) => a.time - b.time);
 }
 
-export function readResults(text) {
+export function readResults(text, { analysis = false } = {}) {
   const [header, ...rows] = parseCsv(text);
   const matchesHeader = (columns) => columns.length === header.length
     && columns.every((column, index) => column.toLowerCase() === header[index].toLowerCase());
-  const report = matchesHeader(reportHeader);
+  const report = !analysis && matchesHeader(reportHeader);
   if (!report && !matchesHeader(reviewHeader)) {
-    throw new Error('Choose a RodentVision Report CSV or a CSV with clip_name, event_time, event_type.');
+    throw new Error(analysis
+      ? 'The RodentVision analysis CSV must have the columns clip_name, event_time, event_type.'
+      : 'Choose a RodentVision Report CSV or a CSV with clip_name, event_time, event_type.');
   }
   const clips = new Map();
   const emptyClips = new Set();
@@ -100,7 +103,7 @@ export function readResults(text) {
       throw new Error(label + ' needs a clip name and an event time, NA, or REVIEW PENDING.');
     }
     const existing = clips.get(key);
-    const clip = existing ?? newClip(name, true);
+    const clip = existing ?? newClip(name, !analysis);
     if (report && existing) throw new Error(label + ' repeats the clip name ' + name + '.');
 
     if (times.toUpperCase() === 'NA') {
@@ -118,7 +121,7 @@ export function readResults(text) {
         const time = parseTime(report ? value.replace(/\s+\(dog\)$/i, '') : value);
         if (!Number.isFinite(time)) throw new Error(label + ' has an invalid time: ' + value + '.');
         if (!report && !Object.hasOwn(categories, category)) throw new Error(label + ' has an invalid event type.');
-        if (!report && clip.events.some((event) => event.time === time && event.category === category)) {
+        if (!report && !analysis && clip.events.some((event) => event.time === time && event.category === category)) {
           throw new Error(label + ' repeats an event for the same clip.');
         }
         clip.events.push({ time, category, originalTime: time });

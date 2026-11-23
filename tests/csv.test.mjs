@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { clipKey, compareClipNames, formatTime, newClip, parseTime, readResults, reportRows, reviewCsvIssue, writeResults } from '../web/csv/model.mjs';
+import {
+  clipKey, compareClipNames, formatTime, isAnalysisCsv, newClip, parseTime,
+  readResults, reportRows, reviewCsvIssue, writeResults,
+} from '../web/csv/model.mjs';
 
 const report = '\uFEFF"Name of Video Clip","Time of the littering act / dog occurrence"\r\n'
   + '"Route, ""North""","00:01.125\n00:03 (dog)\nREVIEW PENDING"\r\n'
@@ -84,4 +87,25 @@ test('reads the detector folder report format with pending rows and duplicate ti
     ['3B', 'REVIEW PENDING'],
     ['23B', '00:18 (dog)'],
   ]);
+});
+
+test('imports the automatic detector export as pending candidates', () => {
+  const analysis = isAnalysisCsv('RodentVision-analysis-results.CSV');
+  assert.equal(analysis, true);
+  const csv = '\uFEFFclip_name,event_time,event_type\r\n'
+    + '"1B.mp4","02:10.125","vehicle_littering"\r\n'
+    + '"1B.mp4","02:10.125","vehicle_littering"\r\n'
+    + '"2B.mp4","NA",""\r\n'
+    + '"3B.mp4","03:01","dog_presence"\r\n';
+  const clips = readResults(csv, { analysis });
+  assert.equal(clips[0].name, '1B.mp4');
+  assert.equal(clips[0].key, clipKey('1B.MP4'));
+  assert.deepEqual(clips.map(({ reviewed }) => reviewed), [false, false, false]);
+  assert.equal(clips[0].events.length, 2);
+  assert.deepEqual(clips[0].events[0], { time: 130.125, category: 'vehicle_littering', originalTime: 130.125 });
+  assert.deepEqual(clips[1].events, []);
+  assert.match(reviewCsvIssue(clips), /Mark at least one clip reviewed/);
+  clips[2].reviewed = true;
+  assert.equal(writeResults(clips, 'review'),
+    '"clip_name","event_time","event_type"\r\n"3B.mp4","03:01","dog_presence"\r\n');
 });

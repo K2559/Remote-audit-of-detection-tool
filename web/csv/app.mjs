@@ -1,5 +1,5 @@
 import {
-  categories, clipKey, compareClipNames, formatTime, newClip, parseTime, readResults,
+  categories, clipKey, compareClipNames, formatTime, isAnalysisCsv, newClip, parseTime, readResults,
   reportHeader, reportRows, reviewCsvIssue, sortedEvents, writeResults,
 } from './model.mjs';
 
@@ -40,14 +40,15 @@ function setFile(clip, file) {
   clip.duration = null;
 }
 
-async function readResultCsv(files) {
-  const csvFiles = files.filter((file) => /\.csv$/i.test(file.name));
+async function readResultCsv(csvFiles) {
   if (!csvFiles.length) return null;
+  const analysisFiles = csvFiles.filter((file) => isAnalysisCsv(file.name));
+  const analysis = analysisFiles.length > 0;
   const parsed = [];
   let firstError;
-  for (const file of csvFiles) {
+  for (const file of analysis ? analysisFiles : csvFiles) {
     try {
-      parsed.push({ file, clips: readResults(await file.text()) });
+      parsed.push({ file, clips: readResults(await file.text(), { analysis }) });
     } catch (error) {
       firstError ??= error;
     }
@@ -56,7 +57,7 @@ async function readResultCsv(files) {
   if (parsed.length === 1) return parsed[0];
   const preferred = parsed.filter(({ file }) => /(report|result|analysis)/i.test(file.name));
   if (preferred.length === 1) return preferred[0];
-  throw new Error('Found multiple compatible CSV files. Choose the RodentVision report CSV separately.');
+  throw new Error('Found multiple compatible CSV files. Choose the analysis or report CSV separately.');
 }
 
 async function importFiles(files) {
@@ -72,7 +73,7 @@ async function importFiles(files) {
   $('open-files').disabled = true;
   $('open-folder').disabled = true;
   try {
-    const result = await readResultCsv(files);
+    const result = await readResultCsv(csvFiles);
     const csv = result?.file;
     if (result) {
       const clips = result.clips;
